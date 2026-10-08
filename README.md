@@ -19,7 +19,7 @@ PayPay の非公式モバイル API クライアントライブラリです。
 pip install oppaypay
 ```
 
-## ログイン
+## Let`s go
 
 ### 新規ログイン
 
