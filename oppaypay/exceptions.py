@@ -1,10 +1,24 @@
-class OpPayPayError(Exception):
-    """oppaypay の汎用エラー"""
 
+from ._login import (
+    OppayPayError,
+    LoginError,
+    OTPError,
+    SessionExpiredError,
+    BotDetectedError,
+    EKYCRequiredError,
+    AccountLockedError,
+    InsufficientBalanceError,
+    APIError,
+)
 
-class OpPayPayLoginError(OpPayPayError):
-    """ログイン失敗・トークン失効・セッション無効"""
-
-
-class OpPayPayNetworkError(OpPayPayError):
-    """ネットワークエラーやレスポンスパース失敗"""
+__all__ = [
+    "OppayPayError",
+    "LoginError",
+    "OTPError",
+    "SessionExpiredError",
+    "BotDetectedError",
+    "EKYCRequiredError",
+    "AccountLockedError",
+    "InsufficientBalanceError",
+    "APIError",
+]
