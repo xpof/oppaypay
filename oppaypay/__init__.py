@@ -1,14 +1,15 @@
-from .login import (
+from ._login import (
     login, otp, id,
     PayPayClient, HumanPatternSimulator,
     build_headers, generate_motion_payload,
+    _uuid4, _uuid7,
     OppayPayError, LoginError, OTPError,
     SessionExpiredError, BotDetectedError,
     EKYCRequiredError, AccountLockedError,
     InsufficientBalanceError, APIError,
 )
-from .pay import _Pay
-from .account import _Account
+from ._pay import _Pay
+from ._account import _Account
 
 __version__ = "0.20.0"
 
