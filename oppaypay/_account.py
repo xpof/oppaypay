@@ -1,44 +1,32 @@
-from ._login import get_core
-from .exceptions import OpPayPayError
+
+__all__ = ["_Account", "_Moneys"]
 
 
 class _Moneys:
-    """残高名前空間"""
 
-    def all(self, id: str | None = None) -> int:
-        """利用可能な残高の合計を返す"""
-        if not id:
-            raise OpPayPayError("id は必須です")
-        return get_core(id).get_balance().useable_balance
+    def __init__(self, client):
+        self.client = client
 
-    def money(self, id: str | None = None) -> int | None:
-        """利用可能な PayPayマネー の残高を返す"""
-        if not id:
-            raise OpPayPayError("id は必須です")
-        return get_core(id).get_balance().money
+    def all(self, id: str):
 
-    def money_light(self, id: str | None = None) -> int:
-        """利用可能な PayPayマネーライト の残高を返す"""
-        if not id:
-            raise OpPayPayError("id は必須です")
-        return get_core(id).get_balance().money_light
+        return self.client.get("/account/moneys/all")
+
+    def money(self, id: str):
+
+        return self.client.get("/account/moneys/money")
+
+    def money_light(self, id: str):
+
+        return self.client.get("/account/moneys/money_light")
 
 
 class _Account:
-    """アカウント名前空間"""
 
-    def __init__(self):
-        self.moneys = _Moneys()
+    def __init__(self, client):
+        self.client = client
+        self.moneys = _Moneys(client)
 
-    def p2p(self, id: str | None = None) -> str:
-        """友だち登録用の URL を生成する"""
-        if not id:
-            raise OpPayPayError("id は必須です")
-        response = get_core(id).create_p2pcode()
-        url = response["payload"]["p2pCode"]
-        if not url.startswith("http"):
-            url = f"https://qr.paypay.ne.jp/{url}"
-        return url
+    def p2p(self, id: str) -> str:
 
-
-account = _Account()
+        resp = self.client.get("/account/p2p/link")
+        return resp.get("url", "")
