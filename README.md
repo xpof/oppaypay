@@ -3,8 +3,8 @@
 ---
 
 ## v0.2.0 の変更点
-- curl_cffi 移行：TLS/JA3 および HTTP/2 フィンガープリントを Safari iOS に偽装 やっぱりcurl_cffiのほうが現実的だった
-- android 7 / galaxy s9 scv38 からiOS 27 / iPhone 17 Pro への移行　android７はすぐにbot検知されてしまう
+- curl_cffi 移行：TLS/JA3 および HTTP/2 フィンガープリントを Safari iOS に偽装 やっぱりcurl_cffiのほうが現実的
+- android 7 / galaxy s9 scv38 からiOS 27 / iPhone 17 Pro への移行　android７のような古いクライアントはボット検知される
 - デバイスセンサー生成：加速度・ジャイロ・タッチイベントを模擬送信
 - 人間パターンシミュレータ：HumanPatternSimulator で自然なリクエストを送信
 - 例外クラス拡充：Bot検知 / eKYC未完了 / アカウントロック / レート制限を明示的に検出
