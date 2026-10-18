@@ -1,5 +1,5 @@
 <img width="91" height="89" alt="logo" src="https://github.com/user-attachments/assets/cfafe8d9-4e3d-4975-b39c-ecb920d6e9ec" />
-[agehan AI]   :agehan AI:   
+   
 
 # oppaypay v.0.3.0
 
