@@ -1,18 +1,20 @@
-# oppaypay v.0.2.0
+<img width="91" height="89" alt="logo" src="https://github.com/user-attachments/assets/cfafe8d9-4e3d-4975-b39c-ecb920d6e9ec" />
+[agehan AI]   :agehan AI:   
+
+# oppaypay v.0.3.0
 
 ---
 
-## v0.2.0 の変更点
-- curl_cffi 移行：TLS/JA3 および HTTP/2 フィンガープリントを Safari iOS に偽装 やっぱりcurl_cffiのほうが現実的
-- android 7 / galaxy s9 scv38 からiOS 27 / iPhone 17 Pro への移行　android７のような古いクライアントはボット検知される
-- デバイスセンサー生成：加速度・ジャイロ・タッチイベントを模擬送信
-- 人間パターンシミュレータ：HumanPatternSimulator で自然なリクエストを送信
-- 例外クラス拡充：Bot検知 / eKYC未完了 / アカウントロック / レート制限を明示的に検出
+## v0.3.0 の変更点
+- **AWS WAFチャレンジ自動解決機能の統合**: `paypy` (paypaypay) のロジックを移植し、`challenge.js` の暗号解析（Scrypt, SHA256 PoW, NetworkBandwidth）をPythonで完全再現。ログイン時のWAFブロックを自動突破します。
+- **完全なモバイルアプリ偽装**: Android 10 (API 29) / Galaxy S9 (SCV38) のデバイス情報、加速度・ジャイロセンサー情報、WebViewのUser-Agentをヘッダーに付与。
+- **WebGLフィンガープリントの拡張**: AWS WAFのフィンガープリントチェックを通過するため、モバイル向けGPU（Apple A17 Pro, Adreno 740）の情報を追加。
+- **多機能APIの統合**: 送金リンクの作成・受取・辞退、送金、QR決済、PayPay銀行への出金、チャットルーム操作など、`paypy` 互換の豊富な機能を追加。
+- **TLS/HTTP2フィンガープリント偽装**: `curl_cffi` を採用し、ブラウザ（Chrome/Safari）のTLSハンドシェイクを模倣。
 
 ---
 
 PayPay の非公式モバイル API クライアントライブラリです。
-内部実装は [PayPaython-mobile](https://github.com/taka-4602/PayPaython-mobile) をベースにしています。
 
 本ライブラリは PayPay 公式の提供するものではありません。PayPay 株式会社とは関係がありません。
 
@@ -21,8 +23,9 @@ PayPay の非公式モバイル API クライアントライブラリです。
 - PayPay アプリの内部 API を利用します。非公開のため、予告なく変更・停止される可能性があります。
 - 利用にあたっては PayPay の利用規約をご確認ください。アカウントが制限されるリスクがあります。
 - 本番運用や金銭取引の自動化への利用は推奨しません。発生した損害について開発者は責任を負いません。
-- ログイン情報・セッショントークンは `~/.oppaypay/session.json` に保存されます。ファイルの取り扱いに注意してください。
-- 日本国外からはアクセスできません（プロキシの利用が必要です）。 [日本国内の無料プロキシリスト](https://github.com/xpof/oppaypay/blob/main/Just/japan-proxies.txt)
+- ログインを3回失敗するとアカウントが一時ロックされます。
+- セッションを大量に作るとアカウント凍結の可能性があります。
+- 日本国外からはアクセスできません（プロキシの利用が必要です）。
 
 ## インストール
 
@@ -30,47 +33,53 @@ PayPay の非公式モバイル API クライアントライブラリです。
 pip install oppaypay
 ```
 
-## Let`s go
+## ログイン
 
-## 新規ログイン
+### 新規デバイスでログイン（2FA必要）
 
 ```python
-import oppaypay
+from oppaypay import login
 
 # 仮ログイン。2FA 用のワンタイムリンクが発行されます。
-# 戻り値は uuidV4 (pre_id)
-pre_id = oppaypay.login(sms="08012345678", password="your_password")
-print(pre_id)  # uuidV4 (仮ID)
+# AWS WAF チャレンジも自動で解決します。
+pre_id = login(sms="08012345678", password="your_password")
+print(pre_id)
 
 # 別のデバイスで PayPay アプリに表示されたワンタイムリンクを承認後、
 # id= の部分を verifycode として入力します。
-# 戻り値は uuidV7 (session_id)
-session_id = oppaypay.login.otp(id=pre_id, verifycode="TK4602")
-print(session_id)  # uuidV7 (永続セッションID)
+session_id = login.otp(id=pre_id, verifycode="TK4602")
+print(session_id)
 ```
 
-※ SMS の 4桁 OTP は廃止されました。現在の 2FA は
-`https://www.paypay.ne.jp/portal/oauth2/l?id=XXXX` 形式の
-ワンタイムリンク承認方式です。`verifycode` には URL 全体または `XXXX` 部分を入れます。
+### 登録済みデバイスでログイン（2FA不要）
+
+```python
+from oppaypay import login
+
+# 以前のログインで取得した device_uuid を指定すると、2FAをスキップできます。
+# ※ 現在の実装では login() に device_uuid を直接渡す仕様に調整が必要です。
+# セッション復帰 (login.id) を推奨します。
+```
 
 ### セッションの復帰
 
 ```python
-oppaypay.login.id(id=session_id)
+from oppaypay import login
+
+login.id(id=session_id)
 ```
 
-セッション情報は `~/.oppaypay/session.json` に保存され、
-2回目以降は SMS 認証なしでログインできます。
+セッション情報は `~/.oppaypay/session.json` に保存され、2回目以降は SMS 認証なしでログインできます。
 
 ## 人間パターンシミュレータ
 
 Bot検知を回避するため、バックグラウンドで人間らしい操作パターンを送信します。
 
 ```python
-from oppaypay import HumanPatternSimulator
+from oppaypay import HumanPatternSimulator, get_core
 
-oppaypay.login.id(id=session_id)
-core = oppaypay.get_core(session_id)
+login.id(id=session_id)
+core = get_core(session_id)
 
 sim = HumanPatternSimulator(core, interval_range=(30, 180))
 sim.start()
@@ -80,53 +89,88 @@ sim.start()
 sim.stop()
 ```
 
-`interval_range` はリクエスト間隔の範囲（秒）です。デフォルトは `(30, 180)`。
-
-## 請求リンクの作成
+## 残高・プロフィール取得
 
 ```python
-# 請求リンク (https://qr.paypay.ne.jp/...) を生成
-req = oppaypay.pay.money(getpayrequestlink=session_id, billed_amount=1000)
-print(req["url"])     # https://qr.paypay.ne.jp/...
-print(req["buildid"]) # 取引番号
+from oppaypay import account, profile
 
-req = oppaypay.pay.money_light(getpayrequestlink=session_id, billed_amount=500)
+# 残高確認
+print(account.moneys.all(id=session_id))          # 利用可能な残高(合計)
+print(account.moneys.money(id=session_id))        # PayPayマネー
+print(account.moneys.money_light(id=session_id))  # PayPayマネーライト
+
+# プロフィール確認 (v0.3.0 追加)
+prof = profile.get(id=session_id)
+print(prof.name)
+print(prof.external_user_id)
 ```
 
-※ 請求リンクの生成自体は残高の種類に依存しません。
-マネー / マネーライトの区別は支払い側で行われます。
-
-## 支払い
+## 送金リンク (v0.3.0 追加)
 
 ```python
-# PayPayマネーで支払う
-oppaypay.pay.confirm.money(buildid=req["url"], getid=payer_session_id)
+from oppaypay import link
 
-# PayPayマネーライトで支払う
-oppaypay.pay.confirm.money_light(buildid=req["url"], getid=payer_session_id)
+# リンクの確認
+info = link.check(id=session_id, url="https://pay.paypay.ne.jp/KT975hvzbH1EulTr")
+print(info.amount)
+
+# リンクの受取
+link.receive(id=session_id, url="https://pay.paypay.ne.jp/KT975hvzbH1EulTr")
+
+# リンクの作成 (ぽち袋モード)
+res = link.create(id=session_id, amount=100, pochibukuro=True)
+print(res.link)
 ```
 
-`buildid` には請求リンクの URL または `https://qr.paypay.ne.jp/` の後ろの部分を指定します。
-`getid` は支払う側のセッション ID です。
-
-## 残高の確認
+## 送金・チャット (v0.3.0 追加)
 
 ```python
-oppaypay.account.moneys.all(id=session_id)          # 利用可能な残高(合計)
-oppaypay.account.moneys.money(id=session_id)        # PayPayマネー
-oppaypay.account.moneys.money_light(id=session_id)  # PayPayマネーライト
+from oppaypay import send, p2p
+
+# ユーザー検索
+user = p2p.search(id=session_id, user_id="paypay_id")
+print(user.external_user_id)
+
+# チャットルームの初期化
+room = p2p.initialize_chatroom(id=session_id, external_user_id=user.external_user_id)
+
+# 送金
+send.money(id=session_id, amount=100, receiver_id=user.external_user_id)
 ```
 
-## 友だち登録用 URL の生成
+## QRコード決済・請求リンク
 
 ```python
-url = oppaypay.account.p2p(id=session_id)
-print(url)  # https://qr.paypay.ne.jp/...
+from oppaypay import pay, get_core
+
+# 請求リンクの作成 (自分が受け取る側)
+req = pay.money(getpayrequestlink=session_id, billed_amount=1000)
+print(req["url"])
+
+# 支払い (自分が支払う側)
+pay.confirm.money(buildid=req["url"], getid=payer_session_id)
+
+# QRコード決済 (v0.3.0 追加)
+core = get_core(session_id)
+result = core.pay_qr_code(url="https://qr.paypay.ne.jp/XXXXX")
+print(result.amount)
+print(result.merchant_name)
+```
+
+## PayPay銀行への出金 (v0.3.0 追加)
+
+```python
+from oppaypay import get_core
+
+core = get_core(session_id)
+result = core.cashout_to_paypaybank(amount=1000)
+print(result.bank_name)
+print(result.bank_account_number)
 ```
 
 ## 例外クラス
 
-v0.2.0 では以下の例外クラスを提供します。
+v0.3.0 では以下の例外クラスを提供します。
 
 | 例外クラス | 説明 |
 |---|---|
@@ -141,59 +185,33 @@ v0.2.0 では以下の例外クラスを提供します。
 ```python
 from oppaypay import (
     OpPayPayBotDetectedError,
-    OpPayPayEKYCRequiredError,
-    OpPayPayAccountLockedError,
     OpPayPayRateLimitError,
 )
 
 try:
-    oppaypay.account.moneys.all(id=session_id)
+    account.moneys.all(id=session_id)
 except OpPayPayBotDetectedError:
     print("Bot検知されました。セッションを再取得してください。")
-except OpPayPayEKYCRequiredError:
-    print("eKYCを完了してください。")
-except OpPayPayAccountLockedError:
-    print("アカウントがロックされています。")
 except OpPayPayRateLimitError:
     print("レート制限に達しました。しばらく待ってください。")
 ```
 
-## その他
+## プロキシの使用
 
 ```python
-from oppaypay import get_core
+from oppaypay import PayPayCore
 
-core = get_core(session_id)
-core.alive()  # Bot検知対策の無駄リクエストを手動で送る
+# セッション復帰時にプロキシを指定
+core = PayPayCore(access_token="your_token", proxy="http://host:port")
 ```
-
-通常は `HumanPatternSimulator` を使うことを推奨します。
 
 ## 既知の問題
 
-- 2025年11月以降、PayPay 側の Bot 検知強化により新規ログインが失敗する場合があります。
-  この場合、PayPay 公式アプリでログインし、アクセストークンを取得して
-  `~/.oppaypay/session.json` に登録する運用が必要になります。
-- v0.2.0 では curl_cffi による TLS/HTTP2 偽装と iOS 27 偽装を実装していますが、
-  PayPay 側の Bot 検知は継続的にアップデートされるため、
-  完全な回避を保証するものではありません。
-- `curl_cffi` のバージョンによっては `safari260_ios` プロファイルが存在しない場合があります。
-  その場合は自動的に古い Safari iOS プロファイルにフォールバックします。
-
-## 追記部分の差分まとめ
-
-| セクション | 操作 | 内容 |
-|---|---|---|
-| バージョン表記 | 更新 | `v0.1.0` → `v0.2.0` |
-| **v0.2.0 の変更点** | **新規追加** | curl_cffi / iOS 27 / センサー / シミュレータ / 例外 / UUID分離 |
-| **人間パターンシミュレータ** | **新規追加** | `HumanPatternSimulator` の使用例 |
-| **例外クラス** | **新規追加** | 7つの例外クラスの説明と使用例 |
-| その他 | 更新 | `core.alive()` の手動呼び出し例、`HumanPatternSimulator` 推奨 |
-| 既知の問題 | 更新 | v0.2.0 の対策と curl_cffi フォールバックの注記 |
-
-
-  
+- PayPay 側の Bot 検知は継続的にアップデートされるため、v0.3.0 の AWS WAF 突破機能や TLS 偽装も、完全な回避を保証するものではありません。
+- `curl_cffi` のバージョンによっては `safari260_ios` などのプロファイルが存在しない場合があります。その場合は自動的に古いプロファイルにフォールバックします。
+- AWS WAFの `challenge.js` の仕様が変更された場合、`_awswaf/verify.py` のアップデートが必要になります。
 
 ## ライセンス
 
 MIT License
+
