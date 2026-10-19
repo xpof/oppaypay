@@ -202,7 +202,7 @@ except OpPayPayRateLimitError:
 from oppaypay import PayPayCore
 
 # セッション復帰時にプロキシを指定
-core = PayPayCore(access_token="your_token", proxy="http://host:port")
+core = PayPayCore(access_token="af47fc62-f7fa-4c0.....", proxy="43.207.132.28:8179")
 ```
 
 ## 既知の問題
