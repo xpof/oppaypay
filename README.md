@@ -6,7 +6,7 @@
 ---
 
 ## v0.3.0 の変更点
-- **AWS WAFチャレンジ自動解決機能の統合**: `paypy` (paypaypay) のロジックを移植し、`challenge.js` の暗号解析（Scrypt, SHA256 PoW, NetworkBandwidth）をPythonで完全再現。ログイン時のWAFブロックを自動突破します。
+- **AWS WAFチャレンジ自動解決機能の統合**: `paypaython` (paypaython-mobile) のロジックを移植し、`challenge.js` の暗号解析（Scrypt, SHA256 PoW, NetworkBandwidth）をPythonで完全再現。ログイン時のWAFブロックを自動突破します。
 - **完全なモバイルアプリ偽装**: Android 10 (API 29) / Galaxy S9 (SCV38) のデバイス情報、加速度・ジャイロセンサー情報、WebViewのUser-Agentをヘッダーに付与。
 - **WebGLフィンガープリントの拡張**: AWS WAFのフィンガープリントチェックを通過するため、モバイル向けGPU（Apple A17 Pro, Adreno 740）の情報を追加。
 - **多機能APIの統合**: 送金リンクの作成・受取・辞退、送金、QR決済、PayPay銀行への出金、チャットルーム操作など、`paypy` 互換の豊富な機能を追加。
