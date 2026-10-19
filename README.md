@@ -111,11 +111,11 @@ print(prof.external_user_id)
 from oppaypay import link
 
 # リンクの確認
-info = link.check(id=session_id, url="https://pay.paypay.ne.jp/KT975hvzbH1EulTr")
+info = link.check(id=session_id, url="https://pay.paypay.ne.jp/ZYpXImBswhhFZooZ")
 print(info.amount)
 
 # リンクの受取
-link.receive(id=session_id, url="https://pay.paypay.ne.jp/KT975hvzbH1EulTr")
+link.receive(id=session_id, url="https://pay.paypay.ne.jp/ZYpXImBswhhFZooZ")
 
 # リンクの作成 (ぽち袋モード)
 res = link.create(id=session_id, amount=100, pochibukuro=True)
@@ -202,7 +202,7 @@ except OpPayPayRateLimitError:
 from oppaypay import PayPayCore
 
 # セッション復帰時にプロキシを指定
-core = PayPayCore(access_token="af47fc62-f7fa-4c0.....", proxy="http://43.207.132.28:8179")
+core = PayPayCore(access_token="af47fc62-f7fa-4c0.....", proxy="http://43.207.132.28:8179") # <- 日本国内のプロキシを使用
 ```
 
 ## 既知の問題
