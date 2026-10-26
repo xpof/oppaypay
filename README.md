@@ -1,7 +1,6 @@
 <img width="91" height="89" alt="logo" src="https://github.com/user-attachments/assets/cfafe8d9-4e3d-4975-b39c-ecb920d6e9ec" /> 
----
 
-# oppaypay
+# oppaypay v 0.4.1
 
 [![Python Version](https://img.shields.io/badge/python-3.9%2B-blue)](https://www.python.org/)
 [![Version](https://img.shields.io/badge/version-0.4.1-green)](https://github.com/xpof/oppaypay)
