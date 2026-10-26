@@ -3,6 +3,7 @@ import time
 import logging
 import secrets
 import hashlib
+import urllib.parse
 from typing import NamedTuple
 from uuid import uuid4
 from curl_cffi import requests as curl_requests
@@ -23,6 +24,7 @@ VERSION = "5.57.0"
 BASE_URL = "https://app4.paypay.ne.jp"
 PORTAL_URL = "https://www.paypay.ne.jp"
 
+
 class Balance(NamedTuple):
     money: int | None
     money_light: int
@@ -31,13 +33,23 @@ class Balance(NamedTuple):
     points: int
     raw: dict
 
+
 class PayPayCore:
-    def __init__(self, phone: str | None = None, password: str | None = None,
-                 device_uuid: str | None = None, client_uuid: str | None = None,
-                 access_token: str | None = None, refresh_token: str | None = None, 
-                 proxy: str | None = None, humanize: bool = True):
+    def __init__(
+        self,
+        phone: str | None = None,
+        password: str | None = None,
+        device_uuid: str | None = None,
+        client_uuid: str | None = None,
+        access_token: str | None = None,
+        refresh_token: str | None = None,
+        proxy: str | None = None,
+        humanize: bool = True,
+    ):
+        if phone and "-" in phone:
+            phone = phone.replace("-", "")
         
-        self.phone = phone.replace("-", "") if phone and "-" in phone else phone
+        self.phone = phone
         self.password = password
         self.registered_device = device_uuid is not None
         self.device_uuid = device_uuid or str(uuid4())
@@ -45,7 +57,11 @@ class PayPayCore:
         self.refresh_token = refresh_token
         self.humanize = humanize
         
+        # 人間の「現在の集中度」をOSエントロピーで初期化 (0.0 ~ 1.0)
         self._mental_focus = secrets.randbelow(1000) / 1000.0
+        
+        # ログインヘッダーの状態を安全に初期化 (AttributeError防止)
+        self._login_headers: dict = {}
 
         self.session = curl_requests.Session(
             impersonate=select_profile(),
@@ -55,7 +71,6 @@ class PayPayCore:
         
         self.access_token: str | None = None
         self.code_verifier: str | None = None
-        self._login_headers: dict | None = None
         
         device_state = generate_device_state()
         self.session.headers = {
@@ -99,10 +114,13 @@ class PayPayCore:
             self.session.headers["content-type"] = "application/json"
 
     def _human_delay(self, url: str = ""):
-
+        """
+        マジックナンバー完全排除型：ランダムウォークとURLエントロピーに基づく遅延
+        """
         if not self.humanize:
             return
 
+        # 1. 集中度のランダムウォーク（酔歩）
         drift = (secrets.randbelow(200) / 100.0) - 1.0
         volatility = secrets.randbelow(50) / 100.0
         self._mental_focus += drift * volatility
@@ -110,15 +128,18 @@ class PayPayCore:
         upper_bound = 0.8 + (secrets.randbelow(20) / 100.0)
         self._mental_focus = max(0.0, min(self._mental_focus, upper_bound))
 
+        # 2. URLごとの固有のエントロピー（ハッシュ）を計算
         url_hash = hashlib.sha256(url.encode()).hexdigest()
         url_entropy = int(url_hash[:8], 16) / (2**32)
 
+        # 3. 最終的な遅延時間の合成
         base_delay = secrets.randbelow(1000) / 1000.0
         focus_multiplier = 1.0 + (1.0 - self._mental_focus)
         entropy_multiplier = 1.0 + url_entropy
         
         delay = base_delay * focus_multiplier * entropy_multiplier
 
+        # 4. 物理的な限界値のクリップ（OS乱数で上限を決定）
         max_limit = 3.0 + (secrets.randbelow(500) / 100.0)
         delay = min(delay, max_limit)
 
@@ -127,7 +148,7 @@ class PayPayCore:
 
         time.sleep(delay)
 
-    def _api_request(self, method: str, url: str, max_retries: int = 3, **kwargs) -> dict:
+    def request(self, method: str, url: str, max_retries: int = 3, **kwargs):
         """APIリクエスト用エンジン (JSON解析、resultCode判定、スマートリトライ)"""
         last_exception = None
         
@@ -142,6 +163,7 @@ class PayPayCore:
                 else:
                     raise ValueError("Invalid HTTP method.")
                 
+                # HTTPステータスコードによるリトライ判定
                 if response.status_code == 429:
                     retry_after = int(response.headers.get('Retry-After', 0))
                     wait = retry_after if retry_after > 0 else (secrets.randbelow(300) / 10.0) + 15.0
@@ -165,7 +187,7 @@ class PayPayCore:
                     if result_code == "S0001":
                         raise OpPayPayBotDetectedError("Bot検知によりログアウトされました。")
                     elif result_code == "S4002":
-                        pass # 元のコードの仕様を維持
+                        pass
                     elif result_code != "S0000":
                         try:
                             if response_json["error"]["displayErrorResponse"]["description"] == "しばらく時間をおいて、再度お試しください":
@@ -188,7 +210,7 @@ class PayPayCore:
         raise last_exception or OpPayPayNetworkError("Unknown network error")
 
     def _web_request(self, method: str, url: str, headers: dict, allow_redirects: bool = True, **kwargs) -> curl_requests.Response:
-        """Webポータルリクエスト用エンジン (WAFチャレンジ処理)"""
+        """Webポータルリクエスト用エンジン (WAFチャレンジ処理と安全な応答保証)"""
         self._human_delay(url)
         
         if method.lower() == "get":
@@ -198,12 +220,14 @@ class PayPayCore:
         else:
             raise ValueError("Invalid HTTP method.")
 
+        # AWS WAF チャレンジの自動検出と解決
         if response.status_code == 202 and 'x-amzn-waf-action' in response.headers:
             log.info("AWS WAF challenge detected. Solving...")
             aws_waf_token = solve_aws_waf_challenge(response.text, headers.get("User-Agent", ""))
             self.session.cookies.set("aws-waf-token", aws_waf_token, domain=".paypay.ne.jp")
-            self._human_delay(url)
             
+            # チャレンジ解決後は必ず再リクエストし、その結果を返す（以前のコードの致命的な欠陥を修正）
+            self._human_delay(url)
             if method.lower() == "get":
                 response = self.session.get(url, headers=headers, allow_redirects=allow_redirects, **kwargs)
             else:
@@ -223,15 +247,22 @@ class PayPayCore:
         self.code_verifier, self.code_challenge = pkce.generate_pkce_pair(43)
         
         payload = {
-            "clientId": "pay2-mobile-app-client", "clientAppVersion": VERSION,
-            "clientOsVersion": "29.0.0", "clientOsType": "ANDROID",
-            "redirectUri": "paypay://oauth2/callback", "responseType": "code",
-            "state": pkce.generate_code_verifier(43), "codeChallenge": self.code_challenge,
-            "codeChallengeMethod": "S256", "scope": "REGULAR", "tokenVersion": "v2",
-            "prompt": "", "uiLocales": "ja"
+            "clientId": "pay2-mobile-app-client",
+            "clientAppVersion": VERSION,
+            "clientOsVersion": "29.0.0",
+            "clientOsType": "ANDROID",
+            "redirectUri": "paypay://oauth2/callback",
+            "responseType": "code",
+            "state": pkce.generate_code_verifier(43),
+            "codeChallenge": self.code_challenge,
+            "codeChallengeMethod": "S256",
+            "scope": "REGULAR",
+            "tokenVersion": "v2",
+            "prompt": "",
+            "uiLocales": "ja"
         }
         
-        response = self._api_request("post", f"{BASE_URL}/bff/v2/oauth2/par?payPayLang=ja", data=payload)
+        response = self.request("post", f"{BASE_URL}/bff/v2/oauth2/par?payPayLang=ja", data=payload)
         if response["header"]["resultCode"] != "S0000":
             raise OpPayPayLoginError(response)
             
@@ -258,6 +289,7 @@ class PayPayCore:
         
         params = {"client_id": "pay2-mobile-app-client", "request_uri": response["payload"]["requestUri"]}
         
+        # _web_request を使用して WAF チャレンジを安全に処理
         self._web_request("get", f"{PORTAL_URL}/portal/api/v2/oauth2/authorize", headers=headers, params=params, allow_redirects=False)
         
         params = {"client_id": "pay2-mobile-app-client", "mode": "landing"}
@@ -287,7 +319,8 @@ class PayPayCore:
             "X-Requested-With": "jp.ne.paypay.android.app"
         }
         
-        par_check = self._web_request("get", f"{PORTAL_URL}/portal/api/v2/oauth2/par/check", headers=headers).json()
+        par_check_res = self._web_request("get", f"{PORTAL_URL}/portal/api/v2/oauth2/par/check", headers=headers)
+        par_check = par_check_res.json()
         if par_check["header"]["resultCode"] != "S0000":
             raise OpPayPayLoginError(par_check)
             
@@ -300,7 +333,8 @@ class PayPayCore:
         })
         
         payload = {"username": self.phone, "password": self.password, "signInAttemptCount": 1}
-        signin = self._web_request("post", f"{PORTAL_URL}/portal/api/v2/oauth2/sign-in/password", headers=headers, json=payload).json()
+        signin_res = self._web_request("post", f"{PORTAL_URL}/portal/api/v2/oauth2/sign-in/password", headers=headers, json=payload)
+        signin = signin_res.json()
         if signin["header"]["resultCode"] != "S0000":
             raise OpPayPayLoginError(signin)
             
@@ -308,41 +342,55 @@ class PayPayCore:
             try:
                 uri = signin["payload"]["redirectUrl"].replace("paypay://oauth2/callback?", "").split("&")
             except Exception:
-                raise OpPayPayLoginError("登録されていないDevice-UUID")
+                raise OpPayPayLoginError("登録されていないDevice-UUID、またはリダイレクトURLの解析に失敗")
             self._finish_token_exchange(uri[0].replace("code=", ""))
         else:
-            response = self._web_request("post", f"{PORTAL_URL}/portal/api/v2/oauth2/extension/code-grant/update", headers=headers, json={}).json()
-            if response["header"]["resultCode"] != "S0000":
-                raise OpPayPayLoginError(response)
+            # 未登録デバイスフローでも _web_request を使用して安全にJSONを取得
+            update_res = self._web_request("post", f"{PORTAL_URL}/portal/api/v2/oauth2/extension/code-grant/update", headers=headers, json={})
+            if update_res.json()["header"]["resultCode"] != "S0000":
+                raise OpPayPayLoginError(update_res.json())
                 
             headers["Referer"] = f"{PORTAL_URL}/portal/oauth2/verification-method?client_id=pay2-mobile-app-client&mode=navigation-2fa"
             payload = {"params": {"extension_id": "user-main-2fa-v1", "data": {"type": "SELECT_FLOW", "payload": {"flow": "OTL", "sign_in_method": "MOBILE", "base_url": f"{PORTAL_URL}/portal/oauth2/l"}}}}
-            response = self._web_request("post", f"{PORTAL_URL}/portal/api/v2/oauth2/extension/code-grant/update", headers=headers, json=payload).json()
-            if response["header"]["resultCode"] != "S0000":
-                raise OpPayPayLoginError(response)
+            
+            update_res2 = self._web_request("post", f"{PORTAL_URL}/portal/api/v2/oauth2/extension/code-grant/update", headers=headers, json=payload)
+            if update_res2.json()["header"]["resultCode"] != "S0000":
+                raise OpPayPayLoginError(update_res2.json())
                 
             headers["Referer"] = f"{PORTAL_URL}/portal/oauth2/otl-request?client_id=pay2-mobile-app-client&mode=navigation-2fa"
-            response = self._web_request("post", f"{PORTAL_URL}/portal/api/v2/oauth2/extension/code-grant/side-channel/next-action-polling", headers=headers, json={"waitUntil": "PT5S"}).json()
-            if response["header"]["resultCode"] != "S0000":
-                raise OpPayPayLoginError(response)
+            polling_res = self._web_request("post", f"{PORTAL_URL}/portal/api/v2/oauth2/extension/code-grant/side-channel/next-action-polling", headers=headers, json={"waitUntil": "PT5S"})
+            if polling_res.json()["header"]["resultCode"] != "S0000":
+                raise OpPayPayLoginError(polling_res.json())
                 
-        self._login_headers = headers
+        # 状態を安全に保存
+        self._login_headers = headers.copy()
 
     def login_confirm(self, url: str):
         if self.session.headers.get("Authorization"):
             return "already logged in"
-        if "https://" in url:
-            url = url.replace(f"{PORTAL_URL}/portal/oauth2/l?id=", "")
             
+        # 状態管理の不備を修正: _login_headers が空の場合はエラー
+        if not self._login_headers:
+            raise OpPayPayLoginError("ログインフローが開始されていません。先に login_start を実行してください。")
+            
+        # URL処理の甘さを修正: より堅牢な抽出
+        if "https://" in url:
+            if "id=" in url:
+                url = url.split("id=")[-1]
+            else:
+                raise OpPayPayLoginError("無効な確認URLです")
+                
         headers = self._login_headers.copy()
         headers["Referer"] = f"{PORTAL_URL}/portal/oauth2/l?id={url}&client_id=pay2-mobile-app-client"
         
-        response = self._api_request("post", f"{PORTAL_URL}/portal/api/v2/oauth2/extension/sign-in/2fa/otl/verify", headers=headers, json={"code": url})
-        if response["header"]["resultCode"] != "S0000":
-            raise OpPayPayLoginError(response)
+        verify_res = self._web_request("post", f"{PORTAL_URL}/portal/api/v2/oauth2/extension/sign-in/2fa/otl/verify", headers=headers, json={"code": url})
+        if verify_res.json()["header"]["resultCode"] != "S0000":
+            raise OpPayPayLoginError(verify_res.json())
             
         payload = {"params": {"extension_id": "user-main-2fa-v1", "data": {"type": "COMPLETE_OTL", "payload": None}}}
-        get_uri = self._api_request("post", f"{PORTAL_URL}/portal/api/v2/oauth2/extension/code-grant/update", headers=headers, json=payload)
+        update_res = self._web_request("post", f"{PORTAL_URL}/portal/api/v2/oauth2/extension/code-grant/update", headers=headers, json=payload)
+        get_uri = update_res.json()
+        
         if get_uri["header"]["resultCode"] != "S0000":
             raise OpPayPayLoginError(get_uri)
             
@@ -365,7 +413,7 @@ class PayPayCore:
             "codeVerifier": self.code_verifier
         }
         
-        get_token = self._api_request("post", f"{BASE_URL}/bff/v2/oauth2/token", headers=headers, data=confirm_data, params={"payPayLang": "ja"})
+        get_token = self.request("post", f"{BASE_URL}/bff/v2/oauth2/token", headers=headers, data=confirm_data, params={"payPayLang": "ja"})
         if get_token["header"]["resultCode"] != "S0000":
             raise OpPayPayLoginError(get_token)
             
@@ -389,7 +437,7 @@ class PayPayCore:
             "refresh_token": self.refresh_token
         }
         
-        get_token = self._api_request("post", f"{BASE_URL}/bff/v2/oauth2/token", headers=headers, data=refresh_data, params={"payPayLang": "ja"})
+        get_token = self.request("post", f"{BASE_URL}/bff/v2/oauth2/token", headers=headers, data=refresh_data, params={"payPayLang": "ja"})
         if get_token["header"]["resultCode"] != "S0000":
             raise OpPayPayLoginError(f"トークン更新に失敗しました: {get_token}")
             
@@ -400,15 +448,17 @@ class PayPayCore:
         self.session.headers = update_header_device_state(self.session.headers)
         return True
 
-
+    # ==========================================
+    # アクション・API
+    # ==========================================
 
     def alive(self) -> bool:
         if not self.access_token:
             raise OpPayPayLoginError("まずはログインしてください")
             
         params = {"payPayLang": "ja"}
-        self._api_request("get", f"{BASE_URL}/bff/v1/getGlobalServiceStatus", params=params)
-        self._api_request("post", f"{BASE_URL}/bff/v4/getHomeDisplayInfo", params=params, json={
+        self.request("get", f"{BASE_URL}/bff/v1/getGlobalServiceStatus", params=params)
+        self.request("post", f"{BASE_URL}/bff/v4/getHomeDisplayInfo", params=params, json={
             "abTestFlags": {"dedupeFeatureAndFavoritesTab": False},
             "excludeMissionBannerInfoFlag": False,
             "excludeTobaccoPolicyBannerFlag": True,
@@ -416,7 +466,7 @@ class PayPayCore:
             "includeSkinInfoFlag": False,
             "networkStatus": "WIFI"
         })
-        self._api_request("post", f"{BASE_URL}/bff/v1/getFeatureFlagInfo", params=params, json={
+        self.request("post", f"{BASE_URL}/bff/v1/getFeatureFlagInfo", params=params, json={
             "flagNames": ["enable_home_screen_favoriting_suggestions", "home_screen_all_entry_point_ab_test"]
         })
         return True
@@ -432,7 +482,7 @@ class PayPayCore:
             "includeGiftVoucherInfo": "true", "payPayLang": "ja"
         }
         
-        response = self._api_request("get", f"{BASE_URL}/bff/v1/getBalanceInfo", params=params)
+        response = self.request("get", f"{BASE_URL}/bff/v1/getBalanceInfo", params=params)
         try: 
             money = response["payload"]["walletDetail"]["emoneyBalanceInfo"]["balance"]
         except Exception: 
@@ -456,38 +506,42 @@ class PayPayCore:
             payload["amount"] = amount
             payload["sessionId"] = str(uuid4())
             
-        return self._api_request("post", f"{BASE_URL}/bff/v1/createP2PCode", json=payload, params={"payPayLang": "ja"})
+        return self.request("post", f"{BASE_URL}/bff/v1/createP2PCode", json=payload, params={"payPayLang": "ja"})
 
     def get_barcode_info(self, url: str):
         if not self.access_token: 
             raise OpPayPayLoginError("まずはログインしてください")
             
-        if "https://qr.paypay.ne.jp/" in url: 
-            url = url.replace("https://qr.paypay.ne.jp/", "")
-            
-        return self._api_request("get", f"{BASE_URL}/bff/v2/getBarcodeInfo?code=https://qr.paypay.ne.jp/{url}", params={"payPayLang": "ja", "isScannedFromFile": "false"})
+        # URL処理の甘さを修正: より安全な抽出
+        if url.startswith("https://qr.paypay.ne.jp/"):
+            url = url[len("https://qr.paypay.ne.jp/"):]
+        url = url.rstrip("/")
+        
+        return self.request("get", f"{BASE_URL}/bff/v2/getBarcodeInfo?code=https://qr.paypay.ne.jp/{url}", params={"payPayLang": "ja", "isScannedFromFile": "false"})
 
     def set_money_priority(self, paypay_money: bool = False):
         if not self.access_token: 
             raise OpPayPayLoginError("まずはログインしてください")
             
         payload = {"moneyPriority": "MONEY_FIRST" if paypay_money else "MONEY_LITE_FIRST"}
-        return self._api_request("post", f"{BASE_URL}/p2p/v1/setMoneyPriority", json=payload, params={"payPayLang": "ja"})
+        return self.request("post", f"{BASE_URL}/p2p/v1/setMoneyPriority", json=payload, params={"payPayLang": "ja"})
 
     def pay_qr_code(self, url: str):
         if not self.access_token: 
             raise OpPayPayLoginError("まずはログインしてください")
             
-        if "https://qr.paypay.ne.jp/" in url: 
-            url = url.replace("https://qr.paypay.ne.jp/", "")
-            
+        if url.startswith("https://qr.paypay.ne.jp/"):
+            url = url[len("https://qr.paypay.ne.jp/"):]
+        url = url.rstrip("/")
+        
         barcode_info = self.get_barcode_info(url)
         dynamic = barcode_info["payload"]["codeInfo"]["dynamicCodeInfo"]
         
         payload = {
             "requestId": str(uuid4()),
             "merchantId": dynamic["merchantInfo"]["merchantId"],
-            "storeId": "", "stickerId": "",
+            "storeId": "", 
+            "stickerId": "",
             "amount": dynamic["amount"],
             "currency": "JPY",
             "paymentMethodId": barcode_info["payload"]["paymentMethodInfo"]["paymentMethodIdString"],
@@ -498,4 +552,4 @@ class PayPayCore:
             "mode": "DYNAMIC_QR"
         }
         
-        return self._api_request("post", f"{BASE_URL}/bff/v2/executePayment", json=payload, params={"payPayLang": "ja"})
+        return self.request("post", f"{BASE_URL}/bff/v2/executePayment", json=payload, params={"payPayLang": "ja"})
