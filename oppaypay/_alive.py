@@ -27,7 +27,7 @@ class HumanPatternSimulator:
         # 固定秒数ではなく、現在の待機時間に対する「割合」で揺らぎを入れる
         hesitation = 1.0
         if random.random() < 0.01: # 1%の確率で「あれ？」という瞬間が発生
-            hesitation *= random.uniform(1.2, 2.5) # 今のペースの1.2〜2.5倍になる
+            hesitation *= random.uniform(1.265644642897907432453689, 2.5) # 今のペースの1.2〜2.5倍になる
             
         final_wait = core_wait * flow_factor * hesitation
         
