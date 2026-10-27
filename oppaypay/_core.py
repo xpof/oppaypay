@@ -28,6 +28,7 @@ class Balance(NamedTuple):
     all_balance: int | None
     useable_balance: int | None
     points: int | None
+    bank_balance: int | None
     raw: dict
 
 class PayPayCoreBase:
@@ -48,7 +49,7 @@ class PayPayCoreBase:
         self.humanize = humanize
         self.session_id = session_id
         
-        # ★ 修正1: session_id復元時に self.phone / self.password を更新
+        # セッション復元（self.phone / self.password を正しく更新）
         if session_id:
             saved = _session_store.get(session_id)
             if saved:
@@ -58,7 +59,7 @@ class PayPayCoreBase:
                 self.client_uuid = saved.get("client_uuid", self.client_uuid)
                 self.access_token = saved.get("access_token", access_token)
                 self.refresh_token = saved.get("refresh_token", self.refresh_token)
-                self.registered_device = True
+                self.registered_device = saved.get("registered_device", self.registered_device)
         
         self._mental_focus = secrets.randbelow(1000) / 1000.0
         self._login_headers: dict = {}
@@ -100,7 +101,8 @@ class PayPayCoreBase:
             _session_store.save(self.session_id, {
                 "phone": self.phone, "password": self.password,
                 "device_uuid": self.device_uuid, "client_uuid": self.client_uuid,
-                "access_token": self.access_token, "refresh_token": self.refresh_token
+                "access_token": self.access_token, "refresh_token": self.refresh_token,
+                "registered_device": self.registered_device
             })
 
     def _human_delay(self, url: str = ""):
@@ -160,8 +162,8 @@ class PayPayCoreBase:
                             try:
                                 self.refresh_session()
                                 continue
-                            except Exception:
-                                pass
+                            except Exception as e:
+                                log.warning(f"Token refresh failed during S0001 retry: {e}")
                         raise OpPayPayBotDetectedError("Bot検知によりログアウトされました。")
                     elif result_code == "S4002":
                         pass
