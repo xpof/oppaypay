@@ -1,11 +1,10 @@
 import time
 import random
 import math
-from ._core import PayPayCore
 from ._sensors import update_header_device_state
 
 class HumanPatternSimulator:
-    def __init__(self, core: PayPayCore):
+    def __init__(self, core):
         self.core = core
         self._flow_state = 1.0
 
@@ -52,6 +51,6 @@ class HumanPatternSimulator:
         except Exception as e:
             print(f"[Organic] 中断: {e}")
 
-def simulate_human_behavior(core: PayPayCore):
+def simulate_human_behavior(core):
     sim = HumanPatternSimulator(core)
     sim.run_full_session_simulation()
