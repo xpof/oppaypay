@@ -31,12 +31,17 @@ class PayPayPayMixin:
             money = response["payload"]["walletDetail"]["emoneyBalanceInfo"]["balance"]
         except Exception:
             money = None
+        try:
+            bank_balance = response["payload"]["walletDetail"]["payPayBankInfo"]["balance"]
+        except Exception:
+            bank_balance = None
         return Balance(
             money=money,
             money_light=response["payload"]["walletDetail"]["prepaidBalanceInfo"]["balance"],
             all_balance=response["payload"]["walletSummary"]["allTotalBalanceInfo"]["balance"],
             useable_balance=response["payload"]["walletSummary"]["usableBalanceInfoWithoutCashback"]["balance"],
             points=response["payload"]["walletDetail"]["cashBackBalanceInfo"]["balance"],
+            bank_balance=bank_balance,
             raw=response
         )
 
