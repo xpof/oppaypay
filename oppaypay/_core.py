@@ -34,7 +34,8 @@ class PayPayCoreBase:
     def __init__(self, phone: str | None = None, password: str | None = None,
                  device_uuid: str | None = None, client_uuid: str | None = None,
                  access_token: str | None = None, refresh_token: str | None = None,
-                 proxy: str | None = None, humanize: bool = True, session_id: str | None = None):
+                 proxy: str | None = None, humanize: bool = True,
+                 session_id: str | None = None):
         if phone and "-" in phone:
             phone = phone.replace("-", "")
         
@@ -47,6 +48,7 @@ class PayPayCoreBase:
         self.humanize = humanize
         self.session_id = session_id
         
+        # ★ 修正1: session_id復元時に self.phone / self.password を更新
         if session_id:
             saved = _session_store.get(session_id)
             if saved:
@@ -60,7 +62,7 @@ class PayPayCoreBase:
         
         self._mental_focus = secrets.randbelow(1000) / 1000.0
         self._login_headers: dict = {}
-        self.access_token: str | None = access_token
+        self.access_token: str | None = access_token if not session_id else self.access_token
         self.code_verifier: str | None = None
         
         web_ua = "Mozilla/5.0 (iPhone; CPU iPhone OS 26_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/23G71"
