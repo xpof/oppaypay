@@ -15,6 +15,7 @@ def set_encryption_key(key: bytes):
     _aesgcm = AESGCM(key)
 
 def update_key_from_goku_props(goku_props: dict):
+    """goku_props から動的に鍵を取得するフォールバック"""
     try:
         if "key" in goku_props:
             key_hex = goku_props["key"]
