@@ -7,19 +7,16 @@ _IOS_PROFILES = [
     {"name": "safari_ios_17_2", "weight": 25, "min_os": "17.2", "max_os": "17.9"},
     {"name": "safari_ios_18_0", "weight": 65, "min_os": "18.0", "max_os": "99.9"},
 ]
-
 _ANDROID_PROFILES = [
     {"name": "chrome120", "weight": 15, "min_os": "10", "max_os": "13"},
     {"name": "chrome123", "weight": 25, "min_os": "10", "max_os": "14"},
     {"name": "chrome124", "weight": 25, "min_os": "11", "max_os": "14"},
     {"name": "chrome131", "weight": 35, "min_os": "12", "max_os": "15"},
 ]
-
 _DESKTOP_PROFILES = [
     {"name": "chrome131", "weight": 30}, {"name": "chrome133", "weight": 30},
     {"name": "safari_17_0", "weight": 20}, {"name": "safari_18_0", "weight": 20},
 ]
-
 _FALLBACK = {"ios": "safari_ios_18_0", "android": "chrome131", "desktop": "chrome131"}
 
 def _weighted_choice(profiles: list) -> str:
