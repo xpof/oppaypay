@@ -3,10 +3,11 @@ import json
 import random
 from curl_cffi import requests, CurlMime
 from .verify import CHALLENGE_TYPES, BANDWIDTH_CHALLENGE, get_fp
-from .._fingerprint import select_profile
+from .._fingerprint import select_profile  
 
 class AwsWafSolver:
     def __init__(self, goku_props: dict, endpoint: str, domain: str, user_agent: str):
+
         self.session = requests.Session(impersonate=select_profile(user_agent))
         self.session.headers = {
             "connection": "keep-alive",
