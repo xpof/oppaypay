@@ -1,13 +1,16 @@
 import re
 import json
 import random
+import logging
 from curl_cffi import requests, CurlMime
 from .verify import CHALLENGE_TYPES, BANDWIDTH_CHALLENGE, get_fp
-from .._fingerprint import select_profile  
+from .crypto import update_key_from_goku_props
+from .._fingerprint import select_profile
+
+log = logging.getLogger(__name__)
 
 class AwsWafSolver:
     def __init__(self, goku_props: dict, endpoint: str, domain: str, user_agent: str):
-
         self.session = requests.Session(impersonate=select_profile(user_agent))
         self.session.headers = {
             "connection": "keep-alive",
@@ -98,9 +101,16 @@ def solve_aws_waf_challenge(html: str, user_agent: str, domain: str = "www.paypa
     match_props = re.search(r'window\.gokuProps\s*=\s*({.*?});', html)
     if not match_props: raise ValueError("gokuProps not found in HTML")
     goku_props = json.loads(match_props.group(1))
+    
+    try:
+        update_key_from_goku_props(goku_props)
+    except Exception as e:
+        log.debug(f"Failed to update WAF key: {e}")
+
     match_host = re.search(r'src=["\']https://([^/]+)/challenge\.js', html)
     if not match_host: match_host = re.search(r'https://([^/]+)/', html)
     if not match_host: raise ValueError("WAF endpoint host not found in HTML")
+    
     endpoint = match_host.group(1)
     solver = AwsWafSolver(goku_props, endpoint, domain, user_agent)
     return solver.solve()
