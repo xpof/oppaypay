@@ -1,0 +1,100 @@
+import hashlib
+import base64
+import itertools
+import json
+import random
+import time
+import uuid
+from typing import Callable, Any, Tuple
+from .crypto import encrypt_waf
+
+def _check_pow(difficulty: int, hex_hash: str) -> bool:
+    return int(hex_hash, 16) >> (len(hex_hash) * 4 - difficulty) == 0
+
+def compute_scrypt_nonce(challenge_input: str, checksum: str, difficulty: int) -> str:
+    salt = checksum.encode("utf-8")
+    for nonce in itertools.count(0):
+        password = (challenge_input + checksum + str(nonce)).encode("utf-8")
+        hash_hex = hashlib.scrypt(password, salt=salt, n=128, r=8, p=1, dklen=16).hex()
+        if _check_pow(difficulty, hash_hex):
+            return str(nonce)
+
+def hash_pow(challenge_input: str, checksum: str, difficulty: int) -> str:
+    base = challenge_input + checksum
+    nonce = 0
+    while True:
+        data = (base + str(nonce)).encode("utf-8")
+        hash_bytes = hashlib.sha256(data).digest()
+        parts = [f"{int.from_bytes(hash_bytes[i:i+4], byteorder='big'):08x}" for i in range(0, len(hash_bytes), 4)]
+        if _check_pow(difficulty, "".join(parts)):
+            return str(nonce)
+        nonce += 1
+
+def network_bandwidth(challenge_input: str, checksum: str, difficulty: int) -> str:
+    sizes = {1: 1024, 2: 10 * 1024, 3: 100 * 1024, 4: 1048576, 5: 10 * 1048576}
+    n = sizes.get(difficulty, 1024)
+    return base64.b64encode(bytes(n)).decode("utf-8")
+
+BANDWIDTH_CHALLENGE = "ha9faaffd31b4d5ede2a2e19d2d7fd525f66fee61911511960dcbb52d3c48ce25"
+CHALLENGE_TYPES: dict[str, Callable[[Any, Any, Any], str]] = {
+    "h72f957df656e80ba55f5d8ce2e8c7ccb59687dba3bfb273d54b08a261b2f3002": compute_scrypt_nonce,
+    "h7b0c470f0cfe3a80a9e26526ad185f484f6817d0832712a4a37a908786a6a67f": hash_pow,
+    BANDWIDTH_CHALLENGE: network_bandwidth,
+}
+
+ALPHABET = "0123456789abcdef"
+IEEE_POLYNOMIAL = 0xEDB88320
+_CRC_TABLE = []
+for i in range(256):
+    v = i
+    for _ in range(8):
+        if v & 1: v = (v >> 1) ^ IEEE_POLYNOMIAL
+        else: v >>= 1
+    _CRC_TABLE.append(v)
+
+def _calculate_crc(data: str) -> int:
+    v = 0 ^ 0xFFFFFFFF
+    for char in data:
+        idx = 255 & (v ^ ord(char))
+        v = (v & 0xFFFFFFFF) >> 8 ^ _CRC_TABLE[idx]
+    result = 0xFFFFFFFF ^ v
+    if result >= 0x80000000: result -= 0x100000000
+    return result
+
+def _encode_number(n: int) -> str:
+    n = n & 0xFFFFFFFF
+    return "".join(ALPHABET[(n >> (28 - i * 4)) & 15] for i in range(8)).upper()
+
+MOBILE_GPUS = [
+    {"vendor": "Qualcomm", "model": "Adreno (TM) 640", "extensions": "WEBGL_debug_renderer_info;WEBGL_lose_context;OES_texture_float;OES_texture_half_float"},
+    {"vendor": "ARM", "model": "Mali-G77", "extensions": "WEBGL_debug_renderer_info;WEBGL_lose_context;OES_texture_float;OES_texture_half_float"},
+]
+
+def get_fp(user_agent: str) -> Tuple[str, str]:
+    ts = int(time.time() * 1000)
+    gpu = random.choice(MOBILE_GPUS)
+    is_mobile = "Mobile" in user_agent or "Android" in user_agent
+    bins = [random.randrange(0, 40) for _ in range(256)]
+    bins[0], bins[-1] = random.randrange(14473, 16573), random.randrange(14473, 16573)
+
+    fp = {
+        "metrics": {"fp2": 1, "browser": 0, "capabilities": 1, "gpu": 7, "dnt": 0, "math": 0, "screen": 0, "navigator": 0, "auto": 1, "stealth": 0, "subtle": 0, "canvas": 5, "formdetector": 1, "be": 0},
+        "start": ts, "flashVersion": None,
+        "plugins": [{"name": "PDF Viewer", "str": "PDF Viewer "}, {"name": "Chrome PDF Viewer", "str": "Chrome PDF Viewer "}],
+        "dupedPlugins": ("PDF Viewer Chrome PDF Viewer ||" + ("360-780-780-24-*-*-*" if is_mobile else "1920-1080-1032-24-*-*-*")),
+        "screenInfo": "360-780-780-24-*-*-*" if is_mobile else "1920-1080-1032-24-*-*-*",
+        "referrer": "", "userAgent": user_agent, "location": "", "webDriver": False,
+        "capabilities": {"css": {"textShadow": 1, "WebkitTextStroke": 1, "boxShadow": 1, "borderRadius": 1, "borderImage": 1, "opacity": 1, "transform": 1, "transition": 1}, "js": {"audio": True, "geolocation": random.choice([True, False]), "localStorage": "supported", "touch": is_mobile, "video": True, "webWorker": random.choice([True, False])}, "elapsed": 1},
+        "gpu": {"vendor": gpu["vendor"], "model": gpu["model"], "extensions": gpu["extensions"].split(";")},
+        "dnt": None, "math": {"tan": "-1.4214488238747245", "sin": "0.8178819121159085", "cos": "-0.5753861119575491"},
+        "automation": {"wd": {"properties": {"document": [], "window": [], "navigator": []}}, "phantom": {"properties": {"window": []}}},
+        "stealth": {"t1": 0, "t2": 0, "i": 1, "mte": 0, "mtd": False},
+        "crypto": {"crypto": 1, "subtle": 1, "encrypt": True, "decrypt": True, "wrapKey": True, "unwrapKey": True, "sign": True, "verify": True, "digest": True, "deriveBits": True, "deriveKey": True, "getRandomValues": True, "randomUUID": True},
+        "canvas": {"hash": random.randrange(645172295, 735192295), "emailHash": None, "histogramBins": bins},
+        "formDetected": False, "numForms": 0, "numFormElements": 0, "be": {"si": False},
+        "end": ts + random.randint(1, 5), "errors": [], "version": "2.4.0", "id": str(uuid.uuid4()),
+    }
+    payload_str = json.dumps(fp, separators=(",", ":"))
+    crc = _calculate_crc(payload_str)
+    checksum = _encode_number(crc)
+    return checksum, encrypt_waf(f"{checksum}#{payload_str}".encode("utf-8"))
