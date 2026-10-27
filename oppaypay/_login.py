@@ -1,5 +1,4 @@
 import pkce
-from uuid import uuid4
 from ._core import VERSION, BASE_URL, PORTAL_URL
 from .exceptions import OpPayPayLoginError
 from ._sensors import update_header_device_state
