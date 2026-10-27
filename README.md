@@ -57,9 +57,9 @@ print(f"総残高: {balance.all_balance} 円")
 print(f"PayPayマネー: {balance.money} 円")
 ```
 
-### 2. 有機的な人間行動シミュレーション (`_alive.py`)
+### 2. 有機的な人間行動シミュレーション 
 
-単なるAPI呼び出しではなく、指先の震えや集中力の揺らぎを模倣した「生きた」セッションを実行できます。
+単なるAPI呼び出しではなく、指先の震えや集中力の揺らぎを模倣したセッションを実行できます。
 
 ```python
 from oppaypay._alive import simulate_human_behavior
