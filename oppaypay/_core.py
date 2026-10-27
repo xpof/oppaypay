@@ -3,7 +3,6 @@ import time
 import logging
 import secrets
 import hashlib
-import urllib.parse
 from typing import NamedTuple
 from uuid import uuid4
 from curl_cffi import requests as curl_requests
@@ -11,7 +10,7 @@ import pkce
 
 from ._fingerprint import select_profile
 from ._sensors import generate_device_state, update_header_device_state
-from ._waf_solver import solve_aws_waf_challenge
+from ._awswaf import solve_aws_waf_challenge
 from .exceptions import (
     OpPayPayError, OpPayPayLoginError, OpPayPayNetworkError,
     OpPayPayBotDetectedError, OpPayPayEKYCRequiredError,
@@ -24,7 +23,6 @@ VERSION = "5.57.0"
 BASE_URL = "https://app4.paypay.ne.jp"
 PORTAL_URL = "https://www.paypay.ne.jp"
 
-
 class Balance(NamedTuple):
     money: int | None
     money_light: int
@@ -33,19 +31,12 @@ class Balance(NamedTuple):
     points: int
     raw: dict
 
-
 class PayPayCore:
-    def __init__(
-        self,
-        phone: str | None = None,
-        password: str | None = None,
-        device_uuid: str | None = None,
-        client_uuid: str | None = None,
-        access_token: str | None = None,
-        refresh_token: str | None = None,
-        proxy: str | None = None,
-        humanize: bool = True,
-    ):
+    def __init__(self, phone: str | None = None, password: str | None = None,
+                 device_uuid: str | None = None, client_uuid: str | None = None,
+                 access_token: str | None = None, refresh_token: str | None = None, 
+                 proxy: str | None = None, humanize: bool = True):
+        
         if phone and "-" in phone:
             phone = phone.replace("-", "")
         
@@ -60,11 +51,12 @@ class PayPayCore:
         # 人間の「現在の集中度」をOSエントロピーで初期化 (0.0 ~ 1.0)
         self._mental_focus = secrets.randbelow(1000) / 1000.0
         
-        # ログインヘッダーの状態を安全に初期化 (AttributeError防止)
+        # 状態管理の不備を防止するため初期化
         self._login_headers: dict = {}
 
+        # iOS 17e 用のTLSフィンガープリント選択 (chrome や safari 系)
         self.session = curl_requests.Session(
-            impersonate=select_profile(),
+            impersonate="safari_ios_17_0", # curl_cffiで利用可能なiOS Safariプロファイル
             proxies={"http": proxy, "https": proxy} if proxy else None,
             timeout=30,
         )
@@ -73,14 +65,16 @@ class PayPayCore:
         self.code_verifier: str | None = None
         
         device_state = generate_device_state()
+        
+        # iOS 17e 用の API ヘッダー
         self.session.headers = {
             "Accept": "*/*",
             "Accept-Charset": "UTF-8",
             "Accept-Encoding": "gzip",
             "Client-Mode": "NORMAL",
-            "Client-OS-Release-Version": "29",
-            "Client-OS-Type": "ANDROID",
-            "Client-OS-Version": "29.0.0",
+            "Client-OS-Release-Version": "26",
+            "Client-OS-Type": "IOS",
+            "Client-OS-Version": "26.6",
             "Client-Type": "PAYPAYAPP",
             "Client-UUID": self.client_uuid,
             "Client-Version": VERSION,
@@ -88,13 +82,13 @@ class PayPayCore:
             "Content-Type": "application/x-www-form-urlencoded",
             "Device-Acceleration": device_state.device_acceleration,
             "Device-Acceleration-2": device_state.device_acceleration_2,
-            "Device-Brand-Name": "KDDI",
-            "Device-Hardware-Name": "qcom",
+            "Device-Brand-Name": "Apple",
+            "Device-Hardware-Name": "iPhone",
             "Device-In-Call": "false",
             "Device-Lock-App-Setting": "false",
             "Device-Lock-Type": "NONE",
-            "Device-Manufacturer-Name": "samsung",
-            "Device-Name": "SCV38",
+            "Device-Manufacturer-Name": "Apple",
+            "Device-Name": "iPhone 17e",
             "Device-Orientation": device_state.device_orientation,
             "Device-Orientation-2": device_state.device_orientation_2,
             "Device-Rotation": device_state.device_rotation,
@@ -105,7 +99,7 @@ class PayPayCore:
             "Network-Status": "WIFI",
             "System-Locale": "ja",
             "Timezone": "Asia/Tokyo",
-            "User-Agent": f"PaypayApp/{VERSION} Android10"
+            "User-Agent": f"PaypayApp/{VERSION} iPhone17e"
         }
         
         if access_token:
@@ -148,7 +142,7 @@ class PayPayCore:
 
         time.sleep(delay)
 
-    def request(self, method: str, url: str, max_retries: int = 3, **kwargs):
+    def _api_request(self, method: str, url: str, max_retries: int = 3, **kwargs) -> dict:
         """APIリクエスト用エンジン (JSON解析、resultCode判定、スマートリトライ)"""
         last_exception = None
         
@@ -226,7 +220,7 @@ class PayPayCore:
             aws_waf_token = solve_aws_waf_challenge(response.text, headers.get("User-Agent", ""))
             self.session.cookies.set("aws-waf-token", aws_waf_token, domain=".paypay.ne.jp")
             
-            # チャレンジ解決後は必ず再リクエストし、その結果を返す（以前のコードの致命的な欠陥を修正）
+            # チャレンジ解決後は必ず再リクエストし、その結果を返す
             self._human_delay(url)
             if method.lower() == "get":
                 response = self.session.get(url, headers=headers, allow_redirects=allow_redirects, **kwargs)
@@ -249,8 +243,8 @@ class PayPayCore:
         payload = {
             "clientId": "pay2-mobile-app-client",
             "clientAppVersion": VERSION,
-            "clientOsVersion": "29.0.0",
-            "clientOsType": "ANDROID",
+            "clientOsVersion": "26.6",
+            "clientOsType": "IOS",
             "redirectUri": "paypay://oauth2/callback",
             "responseType": "code",
             "state": pkce.generate_code_verifier(43),
@@ -262,10 +256,11 @@ class PayPayCore:
             "uiLocales": "ja"
         }
         
-        response = self.request("post", f"{BASE_URL}/bff/v2/oauth2/par?payPayLang=ja", data=payload)
+        response = self._api_request("post", f"{BASE_URL}/bff/v2/oauth2/par?payPayLang=ja", data=payload)
         if response["header"]["resultCode"] != "S0000":
             raise OpPayPayLoginError(response)
             
+        # iOS 17e 用の Web (WebView) ヘッダー
         headers = {
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
             "Accept-Encoding": "gzip, deflate, br, zstd",
@@ -275,21 +270,20 @@ class PayPayCore:
             "Host": "www.paypay.ne.jp",
             "is-emulator": "false",
             "Pragma": "no-cache",
-            "sec-ch-ua": '"Not A(Brand";v="8", "Chromium";v="132", "Android WebView";v="132"',
+            "sec-ch-ua": '"Not/A)Brand";v="99", "Safari";v="26", "WebKit";v="605"',
             "sec-ch-ua-mobile": "?1",
-            "sec-ch-ua-platform": '"Android"',
+            "sec-ch-ua-platform": '"iOS"',
             "Sec-Fetch-Dest": "document",
             "Sec-Fetch-Mode": "navigate",
             "Sec-Fetch-Site": "none",
             "Sec-Fetch-User": "?1",
             "Upgrade-Insecure-Requests": "1",
-            "User-Agent": f"Mozilla/5.0 (Linux; Android 10; SCV38 Build/QP1A.190711.020; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/132.0.6834.163 Mobile Safari/537.36 jp.pay2.app.android/{VERSION}",
-            "X-Requested-With": "jp.ne.paypay.android.app"
+            "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 26_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/23G71",
+            "X-Requested-With": "jp.ne.paypay.app" # iOSアプリのBundle ID
         }
         
         params = {"client_id": "pay2-mobile-app-client", "request_uri": response["payload"]["requestUri"]}
         
-        # _web_request を使用して WAF チャレンジを安全に処理
         self._web_request("get", f"{PORTAL_URL}/portal/api/v2/oauth2/authorize", headers=headers, params=params, allow_redirects=False)
         
         params = {"client_id": "pay2-mobile-app-client", "mode": "landing"}
@@ -309,14 +303,14 @@ class PayPayCore:
             "Host": "www.paypay.ne.jp",
             "Pragma": "no-cache",
             "Referer": f"{PORTAL_URL}/portal/oauth2/sign-in?client_id=pay2-mobile-app-client&mode=landing",
-            "sec-ch-ua": '"Not A(Brand";v="8", "Chromium";v="132", "Android WebView";v="132"',
+            "sec-ch-ua": '"Not/A)Brand";v="99", "Safari";v="26", "WebKit";v="605"',
             "sec-ch-ua-mobile": "?1",
-            "sec-ch-ua-platform": '"Android"',
+            "sec-ch-ua-platform": '"iOS"',
             "Sec-Fetch-Dest": "empty",
             "Sec-Fetch-Mode": "cors",
             "Sec-Fetch-Site": "same-origin",
-            "User-Agent": f"Mozilla/5.0 (Linux; Android 10; SCV38 Build/QP1A.190711.020; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/132.0.6834.163 Mobile Safari/537.36 jp.pay2.app.android/{VERSION}",
-            "X-Requested-With": "jp.ne.paypay.android.app"
+            "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 26_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/23G71",
+            "X-Requested-With": "jp.ne.paypay.app"
         }
         
         par_check_res = self._web_request("get", f"{PORTAL_URL}/portal/api/v2/oauth2/par/check", headers=headers)
@@ -325,8 +319,8 @@ class PayPayCore:
             raise OpPayPayLoginError(par_check)
             
         headers.update({
-            "Client-OS-Type": "ANDROID",
-            "Client-OS-Version": "29.0.0",
+            "Client-OS-Type": "IOS",
+            "Client-OS-Version": "26.6",
             "Client-Version": VERSION,
             "Content-Type": "application/json",
             "Origin": PORTAL_URL,
@@ -345,7 +339,6 @@ class PayPayCore:
                 raise OpPayPayLoginError("登録されていないDevice-UUID、またはリダイレクトURLの解析に失敗")
             self._finish_token_exchange(uri[0].replace("code=", ""))
         else:
-            # 未登録デバイスフローでも _web_request を使用して安全にJSONを取得
             update_res = self._web_request("post", f"{PORTAL_URL}/portal/api/v2/oauth2/extension/code-grant/update", headers=headers, json={})
             if update_res.json()["header"]["resultCode"] != "S0000":
                 raise OpPayPayLoginError(update_res.json())
@@ -362,18 +355,15 @@ class PayPayCore:
             if polling_res.json()["header"]["resultCode"] != "S0000":
                 raise OpPayPayLoginError(polling_res.json())
                 
-        # 状態を安全に保存
         self._login_headers = headers.copy()
 
     def login_confirm(self, url: str):
         if self.session.headers.get("Authorization"):
             return "already logged in"
             
-        # 状態管理の不備を修正: _login_headers が空の場合はエラー
         if not self._login_headers:
             raise OpPayPayLoginError("ログインフローが開始されていません。先に login_start を実行してください。")
             
-        # URL処理の甘さを修正: より堅牢な抽出
         if "https://" in url:
             if "id=" in url:
                 url = url.split("id=")[-1]
@@ -413,7 +403,7 @@ class PayPayCore:
             "codeVerifier": self.code_verifier
         }
         
-        get_token = self.request("post", f"{BASE_URL}/bff/v2/oauth2/token", headers=headers, data=confirm_data, params={"payPayLang": "ja"})
+        get_token = self._api_request("post", f"{BASE_URL}/bff/v2/oauth2/token", headers=headers, data=confirm_data, params={"payPayLang": "ja"})
         if get_token["header"]["resultCode"] != "S0000":
             raise OpPayPayLoginError(get_token)
             
@@ -437,7 +427,7 @@ class PayPayCore:
             "refresh_token": self.refresh_token
         }
         
-        get_token = self.request("post", f"{BASE_URL}/bff/v2/oauth2/token", headers=headers, data=refresh_data, params={"payPayLang": "ja"})
+        get_token = self._api_request("post", f"{BASE_URL}/bff/v2/oauth2/token", headers=headers, data=refresh_data, params={"payPayLang": "ja"})
         if get_token["header"]["resultCode"] != "S0000":
             raise OpPayPayLoginError(f"トークン更新に失敗しました: {get_token}")
             
@@ -457,8 +447,8 @@ class PayPayCore:
             raise OpPayPayLoginError("まずはログインしてください")
             
         params = {"payPayLang": "ja"}
-        self.request("get", f"{BASE_URL}/bff/v1/getGlobalServiceStatus", params=params)
-        self.request("post", f"{BASE_URL}/bff/v4/getHomeDisplayInfo", params=params, json={
+        self._api_request("get", f"{BASE_URL}/bff/v1/getGlobalServiceStatus", params=params)
+        self._api_request("post", f"{BASE_URL}/bff/v4/getHomeDisplayInfo", params=params, json={
             "abTestFlags": {"dedupeFeatureAndFavoritesTab": False},
             "excludeMissionBannerInfoFlag": False,
             "excludeTobaccoPolicyBannerFlag": True,
@@ -466,7 +456,7 @@ class PayPayCore:
             "includeSkinInfoFlag": False,
             "networkStatus": "WIFI"
         })
-        self.request("post", f"{BASE_URL}/bff/v1/getFeatureFlagInfo", params=params, json={
+        self._api_request("post", f"{BASE_URL}/bff/v1/getFeatureFlagInfo", params=params, json={
             "flagNames": ["enable_home_screen_favoriting_suggestions", "home_screen_all_entry_point_ab_test"]
         })
         return True
@@ -482,7 +472,7 @@ class PayPayCore:
             "includeGiftVoucherInfo": "true", "payPayLang": "ja"
         }
         
-        response = self.request("get", f"{BASE_URL}/bff/v1/getBalanceInfo", params=params)
+        response = self._api_request("get", f"{BASE_URL}/bff/v1/getBalanceInfo", params=params)
         try: 
             money = response["payload"]["walletDetail"]["emoneyBalanceInfo"]["balance"]
         except Exception: 
@@ -506,25 +496,24 @@ class PayPayCore:
             payload["amount"] = amount
             payload["sessionId"] = str(uuid4())
             
-        return self.request("post", f"{BASE_URL}/bff/v1/createP2PCode", json=payload, params={"payPayLang": "ja"})
+        return self._api_request("post", f"{BASE_URL}/bff/v1/createP2PCode", json=payload, params={"payPayLang": "ja"})
 
     def get_barcode_info(self, url: str):
         if not self.access_token: 
             raise OpPayPayLoginError("まずはログインしてください")
             
-        # URL処理の甘さを修正: より安全な抽出
         if url.startswith("https://qr.paypay.ne.jp/"):
             url = url[len("https://qr.paypay.ne.jp/"):]
         url = url.rstrip("/")
         
-        return self.request("get", f"{BASE_URL}/bff/v2/getBarcodeInfo?code=https://qr.paypay.ne.jp/{url}", params={"payPayLang": "ja", "isScannedFromFile": "false"})
+        return self._api_request("get", f"{BASE_URL}/bff/v2/getBarcodeInfo?code=https://qr.paypay.ne.jp/{url}", params={"payPayLang": "ja", "isScannedFromFile": "false"})
 
     def set_money_priority(self, paypay_money: bool = False):
         if not self.access_token: 
             raise OpPayPayLoginError("まずはログインしてください")
             
         payload = {"moneyPriority": "MONEY_FIRST" if paypay_money else "MONEY_LITE_FIRST"}
-        return self.request("post", f"{BASE_URL}/p2p/v1/setMoneyPriority", json=payload, params={"payPayLang": "ja"})
+        return self._api_request("post", f"{BASE_URL}/p2p/v1/setMoneyPriority", json=payload, params={"payPayLang": "ja"})
 
     def pay_qr_code(self, url: str):
         if not self.access_token: 
@@ -552,4 +541,4 @@ class PayPayCore:
             "mode": "DYNAMIC_QR"
         }
         
-        return self.request("post", f"{BASE_URL}/bff/v2/executePayment", json=payload, params={"payPayLang": "ja"})
+        return self._api_request("post", f"{BASE_URL}/bff/v2/executePayment", json=payload, params={"payPayLang": "ja"})
