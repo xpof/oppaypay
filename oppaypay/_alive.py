@@ -13,7 +13,7 @@ class HumanPatternSimulator:
         flow_factor = max(0.8, min(1.5, random.gauss(self._flow_state, 0.1)))
         hesitation = 1.0
         if random.random() < 0.01:
-            hesitation *= random.uniform(1.2, 2.5)
+            hesitation *= random.uniform(1.2, 2.5)  # ★ 修正: コメントと一致させる
         final_wait = core_wait * flow_factor * hesitation
         time.sleep(max(0.5, final_wait))
         self._flow_state = max(0.8, min(1.2, self._flow_state + random.uniform(-0.1, 0.1)))
@@ -52,5 +52,6 @@ class HumanPatternSimulator:
             print(f"[Organic] 中断: {e}")
 
 def simulate_human_behavior(core):
+    """READMEのコード例に対応するラッパー関数"""
     sim = HumanPatternSimulator(core)
     sim.run_full_session_simulation()
