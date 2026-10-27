@@ -10,9 +10,8 @@ class DeviceState(NamedTuple):
     device_rotation_2: str
 
 class SensorState:
-    """AR(1)モデルによる連続性のあるセンサー状態"""
     def __init__(self):
-        self.accel = [0.0, 9.8, 0.0]  # 重力方向 y=9.8
+        self.accel = [0.0, 9.8, 0.0]
         self.gyro = [0.0, 0.0, 0.0]
         self.orientation = [0.0, 0.0]
 
