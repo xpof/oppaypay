@@ -1,6 +1,5 @@
 import re
 import json
-import base64
 import random
 import logging
 from curl_cffi import requests, CurlMime
@@ -12,81 +11,62 @@ log = logging.getLogger(__name__)
 
 class AwsWafSolver:
     def __init__(self, goku_props: dict, endpoint: str, domain: str, user_agent: str):
-        self.session = requests.Session(impersonate=select_profile(user_agent))
+        profile = select_profile(user_agent)
+        self.session = requests.Session(impersonate=profile)
         
-        sec_ch_ua_platform = '"iOS"' if "iPhone" in user_agent else '"Android"' if "Android" in user_agent else '"Windows"'
-        sec_ch_ua = '"Not/A)Brand";v="99", "Safari";v="26", "WebKit";v="605"' if "iPhone" in user_agent else '"Not A(Brand";v="8", "Chromium";v="132"'
-        
-        self.session.headers = {
-            "connection": "keep-alive",
-            "sec-ch-ua-platform": sec_ch_ua_platform,
+        self.session.headers.update({
             "user-agent": user_agent,
-            "sec-ch-ua": sec_ch_ua,
-            "sec-ch-ua-mobile": "?1",
             "accept": "*/*",
+            "accept-language": "ja-JP,ja;q=0.9",
             "sec-fetch-site": "cross-site",
             "sec-fetch-mode": "cors",
             "sec-fetch-dest": "empty",
-            "accept-encoding": "gzip, deflate, br, zstd",
-            "accept-language": "ja-JP,ja;q=0.9"
-        }
+            "referer": f"https://{domain}/",
+        })
+        
         self.goku_props = goku_props
         self.endpoint = endpoint
         self.domain = domain
 
     def get_inputs(self):
-        return self.session.get(f"https://{self.endpoint}/inputs?client=browser").json()
-
-    def _extract_challenge_meta(self, inputs: dict) -> tuple:
-        """inputsからchallenge_typeとdifficultyを安全に抽出する"""
-        # 1. トップレベルにある場合（従来の構造）
-        challenge_type = inputs.get("challenge_type")
-        difficulty = inputs.get("difficulty")
-
-        # 2. トップレベルになければ challenge.input をBase64デコードして探す
-        if not challenge_type:
-            try:
-                raw_input = inputs.get("challenge", {}).get("input", "")
-                if raw_input:
-                    # パディング調整
-                    padded = raw_input + "=" * (-len(raw_input) % 4)
-                    decoded = base64.b64decode(padded).decode("utf-8")
-                    inner = json.loads(decoded)
-                    challenge_type = inner.get("challenge_type")
-                    if difficulty is None:
-                        difficulty = inner.get("difficulty")
-                    log.info(f"Extracted challenge_type='{challenge_type}' from decoded challenge.input")
-            except Exception as e:
-                log.debug(f"Failed to decode challenge.input: {e}")
-
-        if not challenge_type:
-            raise ValueError(f"challenge_type not found in inputs. Keys: {list(inputs.keys())}")
-        if difficulty is None:
-            raise ValueError(f"difficulty not found in inputs. Keys: {list(inputs.keys())}")
-
-        return challenge_type, difficulty
+        url = f"https://{self.endpoint}/inputs?client=browser"
+        response = self.session.get(url)
+        
+        try:
+            data = response.json()
+            if "challenge_type" not in data:
+                log.error(f"Unexpected response from /inputs: {data}")
+                raise ValueError(f"challenge_type not found in inputs. Keys: {list(data.keys())}")
+            return data
+        except ValueError:
+            raise
+        except Exception as e:
+            log.error(f"Failed to parse /inputs response. Status: {response.status_code}, Text: {response.text[:200]}")
+            raise
 
     def build_payload(self, inputs: dict):
-        challenge_type, difficulty = self._extract_challenge_meta(inputs)
-        
-        verify_func = CHALLENGE_TYPES.get(challenge_type)
+        verify_func = CHALLENGE_TYPES.get(inputs["challenge_type"])
         if not verify_func:
-            raise ValueError(f"Unknown challenge type: {challenge_type}")
-        
+            raise ValueError(f"Unknown challenge type: {inputs['challenge_type']}")
+            
         checksum, fp = get_fp(self.session.headers["user-agent"])
-        is_mp = (challenge_type == BANDWIDTH_CHALLENGE)
+        is_mp = (inputs["challenge_type"] == BANDWIDTH_CHALLENGE)
         
         if is_mp:
-            solution_data = verify_func(inputs["challenge"]["input"], checksum, difficulty)
+            solution_data = verify_func(inputs["challenge"]["input"], checksum, inputs["difficulty"])
             solution_in_metadata = None
         else:
             solution_data = None
-            solution_in_metadata = verify_func(inputs["challenge"]["input"], checksum, difficulty)
+            solution_in_metadata = verify_func(inputs["challenge"]["input"], checksum, inputs["difficulty"])
             
         payload = {
-            "challenge": inputs["challenge"], "checksum": checksum, "solution": solution_in_metadata,
-            "signals": [{"name": "Zoey", "value": {"Present": fp}}], "existing_token": None,
-            "client": "Browser", "domain": self.domain,
+            "challenge": inputs["challenge"],
+            "checksum": checksum,
+            "solution": solution_in_metadata,
+            "signals": [{"name": "Zoey", "value": {"Present": fp}}],
+            "existing_token": None,
+            "client": "Browser",
+            "domain": self.domain,
             "metrics": [
                 {"name": "2", "value": round(random.uniform(0.5, 3.0), 13), "unit": "2"},
                 {"name": "100", "value": 1, "unit": "2"}, {"name": "101", "value": 1, "unit": "2"},
@@ -121,7 +101,7 @@ class AwsWafSolver:
 
     def _mp_verify(self, payload, solution_data):
         self.session.headers.update({"origin": f"https://{self.domain}", "referer": f"https://{self.domain}/"})
-        if "content-type" in self.session.headers: 
+        if "content-type" in self.session.headers:
             del self.session.headers["content-type"]
             
         metadata_json = json.dumps(payload, separators=(',', ':'))
@@ -130,25 +110,22 @@ class AwsWafSolver:
         mp.addpart(name="solution_metadata", content_type="application/json", data=metadata_json.encode('utf-8'))
         
         res = self.session.post(f"https://{self.endpoint}/mp_verify", multipart=mp)
-        try:
-            result = res.json()
-        except Exception:
-            raise Exception(f"mp_verify returned non-JSON: {res.text[:200]}")
-            
-        if result.get("token"): 
+        result = res.json()
+        
+        if result.get("token"):
             return result["token"]
-        if result.get("inputs"): 
-            raise Exception("mp_verify: トークン取得失敗 (新しいチャレンジが要求されました)")
+        if result.get("inputs"):
+            raise Exception("mp_verify: トークン取得失敗、新しいチャレンジが返されました")
         raise Exception(f"mp_verify: 予期しないレスポンス: {result}")
 
     def _legacy_verify(self, payload):
-        self.session.headers.update({"content-type": "text/plain;charset=UTF-8", "origin": f"https://{self.domain}", "referer": f"https://{self.domain}/"})
-        res = self.session.post(f"https://{self.endpoint}/verify", json=payload)
-        try:
-            result = res.json()
-        except Exception:
-            raise Exception(f"verify returned non-JSON: {res.text[:200]}")
-        return result["token"]
+        self.session.headers.update({
+            "content-type": "text/plain;charset=UTF-8",
+            "origin": f"https://{self.domain}",
+            "referer": f"https://{self.domain}/"
+        })
+        res = self.session.post(f"https://{self.endpoint}/verify", json=payload).json()
+        return res["token"]
 
 
 def solve_aws_waf_challenge(html: str, user_agent: str, domain: str = "www.paypay.ne.jp") -> str:
@@ -163,13 +140,14 @@ def solve_aws_waf_challenge(html: str, user_agent: str, domain: str = "www.paypa
 
     match_host = re.search(r'src=["\']https://([^/]+)/challenge\.js', html)
     if not match_host:
-        match_captcha = re.search(r'src=["\']https://([^/]+)/captcha\.js', html)
+    match_captcha = re.search(r'src=["\']https://([^/]+)/captcha\.js', html)
         if match_captcha:
             raise ValueError(
                 "AWS WAF CAPTCHA detected (captcha.js). "
                 "This solver only supports challenge.js. "
                 "Manual intervention or external CAPTCHA solving is required."
             )
+
         match_host = re.search(r'https://([^/]+)/', html)
         if not match_host:
             raise ValueError("WAF endpoint host not found in HTML")
