@@ -1,5 +1,6 @@
 import re
 import json
+import base64
 import random
 import logging
 from curl_cffi import requests, CurlMime
@@ -36,20 +37,51 @@ class AwsWafSolver:
     def get_inputs(self):
         return self.session.get(f"https://{self.endpoint}/inputs?client=browser").json()
 
+    def _extract_challenge_meta(self, inputs: dict) -> tuple:
+        """inputsからchallenge_typeとdifficultyを安全に抽出する"""
+        # 1. トップレベルにある場合（従来の構造）
+        challenge_type = inputs.get("challenge_type")
+        difficulty = inputs.get("difficulty")
+
+        # 2. トップレベルになければ challenge.input をBase64デコードして探す
+        if not challenge_type:
+            try:
+                raw_input = inputs.get("challenge", {}).get("input", "")
+                if raw_input:
+                    # パディング調整
+                    padded = raw_input + "=" * (-len(raw_input) % 4)
+                    decoded = base64.b64decode(padded).decode("utf-8")
+                    inner = json.loads(decoded)
+                    challenge_type = inner.get("challenge_type")
+                    if difficulty is None:
+                        difficulty = inner.get("difficulty")
+                    log.info(f"Extracted challenge_type='{challenge_type}' from decoded challenge.input")
+            except Exception as e:
+                log.debug(f"Failed to decode challenge.input: {e}")
+
+        if not challenge_type:
+            raise ValueError(f"challenge_type not found in inputs. Keys: {list(inputs.keys())}")
+        if difficulty is None:
+            raise ValueError(f"difficulty not found in inputs. Keys: {list(inputs.keys())}")
+
+        return challenge_type, difficulty
+
     def build_payload(self, inputs: dict):
-        verify_func = CHALLENGE_TYPES.get(inputs["challenge_type"])
+        challenge_type, difficulty = self._extract_challenge_meta(inputs)
+        
+        verify_func = CHALLENGE_TYPES.get(challenge_type)
         if not verify_func:
-            raise ValueError(f"Unknown challenge type: {inputs['challenge_type']}")
+            raise ValueError(f"Unknown challenge type: {challenge_type}")
         
         checksum, fp = get_fp(self.session.headers["user-agent"])
-        is_mp = (inputs["challenge_type"] == BANDWIDTH_CHALLENGE)
+        is_mp = (challenge_type == BANDWIDTH_CHALLENGE)
         
         if is_mp:
-            solution_data = verify_func(inputs["challenge"]["input"], checksum, inputs["difficulty"])
+            solution_data = verify_func(inputs["challenge"]["input"], checksum, difficulty)
             solution_in_metadata = None
         else:
             solution_data = None
-            solution_in_metadata = verify_func(inputs["challenge"]["input"], checksum, inputs["difficulty"])
+            solution_in_metadata = verify_func(inputs["challenge"]["input"], checksum, difficulty)
             
         payload = {
             "challenge": inputs["challenge"], "checksum": checksum, "solution": solution_in_metadata,
@@ -138,7 +170,6 @@ def solve_aws_waf_challenge(html: str, user_agent: str, domain: str = "www.paypa
                 "This solver only supports challenge.js. "
                 "Manual intervention or external CAPTCHA solving is required."
             )
-        
         match_host = re.search(r'https://([^/]+)/', html)
         if not match_host:
             raise ValueError("WAF endpoint host not found in HTML")
