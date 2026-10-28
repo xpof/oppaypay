@@ -107,17 +107,15 @@ class PayPayLoginMixin:
                 data_payload = request_data.get("data", {})
                 
                 if data_payload.get("type") == "VERIFY_QR" or data_payload.get("payload", {}).get("previous_interaction") == "COMPLETE_OTL":
-                    log.info("OTL has been approved. Proceeding to complete the flow.")
+                    log.info("OTL has been approved on the server side. Ready for login_confirm.")
                     otl_approved = True
                     self._login_headers = headers.copy()
-                    self._complete_otl_flow(headers, request_data)
-                    return
+                    return  
                 
                 if not payload_data.get("continue", True):
                     log.info("OTL polling completed without explicit approval signal.")
                     otl_approved = True
                     self._login_headers = headers.copy()
-                    self._complete_otl_flow(headers)
                     return
                 
                 time.sleep(1)
@@ -125,39 +123,6 @@ class PayPayLoginMixin:
             if not otl_approved:
                 log.warning("OTL polling reached maximum attempts. OTL might not be approved yet.")
                 self._login_headers = headers.copy()
-
-    def _complete_otl_flow(self, headers, request_data=None):
-        log.debug("Completing OTL flow (code-grant/update)...")
-        
-        if request_data and "extension_id" in request_data:
-            payload = {
-                "params": {
-                    "extension_id": request_data["extension_id"],
-                    "data": {
-                        "type": "COMPLETE_OTL",
-                        "payload": None
-                    }
-                }
-            }
-        else:
-            payload = {"params": {"extension_id": "user-main-2fa-v1", "data": {"type": "COMPLETE_OTL", "payload": None}}}
-        
-        log.debug(f"Sending COMPLETE_OTL payload: {payload}")
-        
-        update_res = self._web_request("post", f"{PORTAL_URL}/portal/api/v2/oauth2/extension/code-grant/update", headers=headers, json=payload)
-        get_uri = update_res.json()
-        
-        log.debug(f"COMPLETE_OTL response: {get_uri}")
-        
-        if get_uri["header"]["resultCode"] != "S0000":
-            raise OpPayPayLoginError(get_uri)
-            
-        try:
-            uri = get_uri["payload"]["redirect_uri"].replace("paypay://oauth2/callback?", "").split("&")
-        except Exception:
-            raise OpPayPayLoginError('redirect_uriが見つかりませんでした\n' + str(get_uri))
-            
-        self._finish_token_exchange(uri[0].replace("code=", ""))
 
     def login_confirm(self, url: str):
         if self.session.headers.get("Authorization"):
@@ -176,14 +141,27 @@ class PayPayLoginMixin:
         
         log.debug(f"Sending OTL code for verification: {url[:6]}... (masked)")
         verify_res = self._web_request("post", f"{PORTAL_URL}/portal/api/v2/oauth2/extension/sign-in/2fa/otl/verify", headers=headers, json={"code": url})
-        
         verify_json = verify_res.json()
         log.debug(f"OTL verify response: {verify_json}")
         
         if verify_json["header"]["resultCode"] != "S0000":
             raise OpPayPayLoginError(verify_json)
             
-        self._complete_otl_flow(headers)
+        log.debug("Completing OTL flow (code-grant/update)...")
+        payload = {"params": {"extension_id": "user-main-2fa-v1", "data": {"type": "COMPLETE_OTL", "payload": None}}}
+        update_res = self._web_request("post", f"{PORTAL_URL}/portal/api/v2/oauth2/extension/code-grant/update", headers=headers, json=payload)
+        get_uri = update_res.json()
+        log.debug(f"COMPLETE_OTL response: {get_uri}")
+        
+        if get_uri["header"]["resultCode"] != "S0000":
+            raise OpPayPayLoginError(get_uri)
+            
+        try:
+            uri = get_uri["payload"]["redirect_uri"].replace("paypay://oauth2/callback?", "").split("&")
+        except Exception:
+            raise OpPayPayLoginError('redirect_uriが見つかりませんでした\n' + str(get_uri))
+            
+        self._finish_token_exchange(uri[0].replace("code=", ""))
 
     def _finish_token_exchange(self, code: str):
         log.debug("Exchanging authorization code for tokens...")
