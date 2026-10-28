@@ -4,7 +4,7 @@ import logging
 import secrets
 import hashlib
 import re
-from typing import NamedTuple
+from typing import NamedTuple, List, Dict, Any, Optional
 from uuid import uuid4
 from curl_cffi import requests as curl_requests
 import pkce
@@ -29,6 +29,9 @@ class Balance(NamedTuple):
     all_balance: int | None
     useable_balance: int | None
     points: int | None
+    bank_balance: int | None
+    securities_balance: int | None
+    gift_voucher_balance: int | None
     raw: dict
 
 class PayPayCore:
@@ -194,6 +197,7 @@ class PayPayCore:
                 response = self.session.post(url, headers=headers, allow_redirects=allow_redirects, **kwargs)
         return response
 
+
     def login_start(self):
         if not self.phone:
             raise OpPayPayLoginError("電話番号を入力してください")
@@ -269,7 +273,6 @@ class PayPayCore:
             raise OpPayPayLoginError("ログインフローが開始されていません。先に login_start を実行してください。")
         
         headers = self._login_headers.copy()
-        
         headers["Referer"] = f"{PORTAL_URL}/portal/oauth2/verification-method?client_id=pay2-mobile-app-client&mode=navigation-2fa"
         payload = {"params": {"extension_id": "user-main-2fa-v1", "data": {"type": "SELECT_FLOW", "payload": {"flow": "OTP", "sign_in_method": "MOBILE"}}}}
         select_res = self._web_request("post", f"{PORTAL_URL}/portal/api/v2/oauth2/extension/code-grant/update", headers=headers, json=payload)
@@ -309,7 +312,6 @@ class PayPayCore:
             raise OpPayPayLoginError("ログインフローが開始されていません。先に login_start を実行してください。")
         
         headers = self._login_headers.copy()
-        
         headers["Referer"] = f"{PORTAL_URL}/portal/oauth2/verification-method?client_id=pay2-mobile-app-client&mode=navigation-2fa"
         payload = {"params": {"extension_id": "user-main-2fa-v1", "data": {"type": "SELECT_FLOW", "payload": {"flow": "OTL", "sign_in_method": "MOBILE", "base_url": f"{PORTAL_URL}/portal/oauth2/l"}}}}
         select_res = self._web_request("post", f"{PORTAL_URL}/portal/api/v2/oauth2/extension/code-grant/update", headers=headers, json=payload)
@@ -318,13 +320,13 @@ class PayPayCore:
         
         headers["Referer"] = f"{PORTAL_URL}/portal/oauth2/otl-request?client_id=pay2-mobile-app-client&mode=navigation-2fa"
         
-        print(" SMSに認証URLが送信されました。")
+        print("📱 SMSに認証URLが送信されました。")
         print("👉 以下の手順で承認を完了させてください：")
         print("   1. スマホでSMSのURLを開いてください。")
         print("   2. 表示されるQRコードをPayPayアプリでスキャンして『ログインを許可』を押してください。")
         print("   3. 承認が完了すると、このプログラムが自動的に検知してログインを完了します。")
 
-        max_polling_attempts = 60 
+        max_polling_attempts = 60
         for poll_attempt in range(max_polling_attempts):
             polling_res = self._web_request("post", f"{PORTAL_URL}/portal/api/v2/oauth2/extension/code-grant/side-channel/next-action-polling", headers=headers, json={"waitUntil": "PT5S"})
             polling_data = polling_res.json()
@@ -347,7 +349,7 @@ class PayPayCore:
                     self._login_headers = headers.copy()
                     return
             
-            print(f"⏳ 承認待機中... ({poll_attempt + 1}/{max_polling_attempts})")
+            print(f" 承認待機中... ({poll_attempt + 1}/{max_polling_attempts})")
             time.sleep(5)
             
         raise OpPayPayLoginError("承認のタイムアウト。URLを開いて承認操作を行ってください。")
@@ -392,6 +394,7 @@ class PayPayCore:
         self.session.headers = update_header_device_state(self.session.headers)
         return True
 
+
     def alive(self) -> bool:
         if not self.access_token:
             raise OpPayPayLoginError("まずはログインしてください")
@@ -420,18 +423,83 @@ class PayPayCore:
             "includeGiftVoucherInfo": "true", "payPayLang": "ja"
         }
         response = self._api_request("get", f"{BASE_URL}/bff/v1/getBalanceInfo", params=params)
-        try: 
-            money = response["payload"]["walletDetail"]["emoneyBalanceInfo"]["balance"]
-        except Exception: 
-            money = None
+        
+        wallet_detail = response.get("payload", {}).get("walletDetail", {})
+        wallet_summary = response.get("payload", {}).get("walletSummary", {})
+        
+        money = None
+        for key in ["emoneyBalanceInfo", "moneyBalanceInfo"]:
+            if key in wallet_detail:
+                try:
+                    money = wallet_detail[key]["balance"]
+                    break
+                except (KeyError, TypeError):
+                    pass
+        
+        money_light = None
+        if "prepaidBalanceInfo" in wallet_detail:
+            try:
+                money_light = wallet_detail["prepaidBalanceInfo"]["balance"]
+            except (KeyError, TypeError):
+                pass
+        
+        points = None
+        for key in ["cashBackBalanceInfo", "pointBalanceInfo", "paypayPointBalanceInfo"]:
+            if key in wallet_detail:
+                try:
+                    points = wallet_detail[key]["balance"]
+                    break
+                except (KeyError, TypeError):
+                    pass
+        
+        bank_balance = None
+        if "payPayBankInfo" in wallet_detail:
+            try:
+                bank_balance = wallet_detail["payPayBankInfo"]["balance"]
+            except (KeyError, TypeError):
+                pass
+        
+        securities_balance = None
+        if "payPaySecuritiesInfo" in wallet_detail:
+            try:
+                securities_balance = wallet_detail["payPaySecuritiesInfo"]["balance"]
+            except (KeyError, TypeError):
+                pass
+        
+        gift_voucher_balance = None
+        if "giftVoucherInfo" in wallet_detail:
+            try:
+                gift_voucher_balance = wallet_detail["giftVoucherInfo"]["balance"]
+            except (KeyError, TypeError):
+                pass
+        
+        all_balance = None
+        if "allTotalBalanceInfo" in wallet_summary:
+            try:
+                all_balance = wallet_summary["allTotalBalanceInfo"]["balance"]
+            except (KeyError, TypeError):
+                pass
+        
+        useable_balance = None
+        if "usableBalanceInfoWithoutCashback" in wallet_summary:
+            try:
+                useable_balance = wallet_summary["usableBalanceInfoWithoutCashback"]["balance"]
+            except (KeyError, TypeError):
+                pass
+        
         return Balance(
             money=money,
-            money_light=response["payload"]["walletDetail"]["prepaidBalanceInfo"]["balance"],
-            all_balance=response["payload"]["walletSummary"]["allTotalBalanceInfo"]["balance"],
-            useable_balance=response["payload"]["walletSummary"]["usableBalanceInfoWithoutCashback"]["balance"],
-            points=response["payload"]["walletDetail"]["cashBackBalanceInfo"]["balance"],
+            money_light=money_light,
+            all_balance=all_balance,
+            useable_balance=useable_balance,
+            points=points,
+            bank_balance=bank_balance,
+            securities_balance=securities_balance,
+            gift_voucher_balance=gift_voucher_balance,
             raw=response
         )
+
+  
 
     def create_p2pcode(self, amount: int = None):
         if not self.access_token: 
@@ -441,6 +509,11 @@ class PayPayCore:
             payload["amount"] = amount
             payload["sessionId"] = str(uuid4())
         return self._api_request("post", f"{BASE_URL}/bff/v1/createP2PCode", json=payload, params={"payPayLang": "ja"})
+
+    def delete_p2pcode(self, code_id: str):
+        if not self.access_token:
+            raise OpPayPayLoginError("まずはログインしてください")
+        return self._api_request("delete", f"{BASE_URL}/p2p/v1/p2pCodes/{code_id}", params={"payPayLang": "ja"})
 
     def get_barcode_info(self, url: str):
         if not self.access_token: 
@@ -479,3 +552,135 @@ class PayPayCore:
             "mode": "DYNAMIC_QR"
         }
         return self._api_request("post", f"{BASE_URL}/bff/v2/executePayment", json=payload, params={"payPayLang": "ja"})
+
+    def send_money(self, phone: str, amount: int, message: str = ""):
+        if not self.access_token:
+            raise OpPayPayLoginError("まずはログインしてください")
+        if "-" in phone:
+            phone = phone.replace("-", "")
+        payload = {
+            "sessionId": str(uuid4()),
+            "amount": amount,
+            "currency": "JPY",
+            "receiverPhoneNumber": phone,
+            "message": message,
+            "paymentMethodId": "",
+            "paymentMethodType": "WALLET"
+        }
+        return self._api_request("post", f"{BASE_URL}/p2p/v1/sendMoney", json=payload, params={"payPayLang": "ja"})
+
+
+
+    def charge_money(self, amount: int, payment_method_id: str):
+        if not self.access_token:
+            raise OpPayPayLoginError("まずはログインしてください")
+        payload = {
+            "amount": amount,
+            "currency": "JPY",
+            "paymentMethodId": payment_method_id,
+            "sessionId": str(uuid4())
+        }
+        return self._api_request("post", f"{BASE_URL}/bff/v1/charge", json=payload, params={"payPayLang": "ja"})
+
+    def withdraw_money(self, amount: int, bank_account_id: str):
+        if not self.access_token:
+            raise OpPayPayLoginError("まずはログインしてください")
+        payload = {
+            "amount": amount,
+            "currency": "JPY",
+            "bankAccountId": bank_account_id,
+            "sessionId": str(uuid4())
+        }
+        return self._api_request("post", f"{BASE_URL}/bff/v1/withdraw", json=payload, params={"payPayLang": "ja"})
+
+
+    def get_registered_banks(self):
+        if not self.access_token:
+            raise OpPayPayLoginError("まずはログインしてください")
+        return self._api_request("get", f"{BASE_URL}/bff/v1/getRegisteredBanks", params={"payPayLang": "ja"})
+
+    def get_registered_cards(self):
+        if not self.access_token:
+            raise OpPayPayLoginError("まずはログインしてください")
+        return self._api_request("get", f"{BASE_URL}/bff/v1/getRegisteredCards", params={"payPayLang": "ja"})
+
+
+
+    def get_profile(self):
+        if not self.access_token:
+            raise OpPayPayLoginError("まずはログインしてください")
+        return self._api_request("get", f"{BASE_URL}/bff/v1/getProfile", params={"payPayLang": "ja"})
+
+    def get_kyc_status(self):
+        if not self.access_token:
+            raise OpPayPayLoginError("まずはログインしてください")
+        return self._api_request("get", f"{BASE_URL}/bff/v1/getKycStatus", params={"payPayLang": "ja"})
+
+
+    def get_notifications(self, limit: int = 20):
+        if not self.access_token:
+            raise OpPayPayLoginError("まずはログインしてください")
+        return self._api_request("get", f"{BASE_URL}/bff/v1/getNotifications", params={"payPayLang": "ja", "limit": str(limit)})
+
+    def mark_notification_read(self, notification_id: str):
+        if not self.access_token:
+            raise OpPayPayLoginError("まずはログインしてください")
+        return self._api_request("post", f"{BASE_URL}/bff/v1/markNotificationRead", json={"notificationId": notification_id}, params={"payPayLang": "ja"})
+
+    def get_campaigns(self):
+        if not self.access_token:
+            raise OpPayPayLoginError("まずはログインしてください")
+        return self._api_request("get", f"{BASE_URL}/bff/v1/getCampaigns", params={"payPayLang": "ja"})
+
+    def get_coupons(self):
+        if not self.access_token:
+            raise OpPayPayLoginError("まずはログインしてください")
+        return self._api_request("get", f"{BASE_URL}/bff/v1/getCoupons", params={"payPayLang": "ja"})
+
+
+
+    def get_transaction_history(self, limit: int = 20, offset: int = 0):
+        if not self.access_token:
+            raise OpPayPayLoginError("まずはログインしてください")
+        return self._api_request("get", f"{BASE_URL}/bff/v1/getTransactionHistory", params={"payPayLang": "ja", "limit": str(limit), "offset": str(offset)})
+
+    def get_payment_history(self, limit: int = 20, offset: int = 0):
+        if not self.access_token:
+            raise OpPayPayLoginError("まずはログインしてください")
+        return self._api_request("get", f"{BASE_URL}/bff/v1/getPaymentHistory", params={"payPayLang": "ja", "limit": str(limit), "offset": str(offset)})
+
+    def get_login_history(self, limit: int = 20):
+        if not self.access_token:
+            raise OpPayPayLoginError("まずはログインしてください")
+        return self._api_request("get", f"{BASE_URL}/bff/v1/getLoginHistory", params={"payPayLang": "ja", "limit": str(limit)})
+
+    def get_devices(self):
+        if not self.access_token:
+            raise OpPayPayLoginError("まずはログインしてください")
+        return self._api_request("get", f"{BASE_URL}/bff/v1/getDevices", params={"payPayLang": "ja"})
+
+
+    def get_bill_info(self, bill_id: str):
+        if not self.access_token:
+            raise OpPayPayLoginError("まずはログインしてください")
+        return self._api_request("get", f"{BASE_URL}/bff/v1/getBillInfo/{bill_id}", params={"payPayLang": "ja"})
+
+    def pay_bill(self, bill_id: str, payment_method_id: str):
+        if not self.access_token:
+            raise OpPayPayLoginError("まずはログインしてください")
+        payload = {
+            "billId": bill_id,
+            "paymentMethodId": payment_method_id,
+            "sessionId": str(uuid4())
+        }
+        return self._api_request("post", f"{BASE_URL}/bff/v1/payBill", json=payload, params={"payPayLang": "ja"})
+
+    def get_gift_voucher_balance(self):
+        if not self.access_token:
+            raise OpPayPayLoginError("まずはログインしてください")
+        return self._api_request("get", f"{BASE_URL}/bff/v1/getGiftVoucherBalance", params={"payPayLang": "ja"})
+
+    def get_securities_balance(self):
+        if not self.access_token:
+            raise OpPayPayLoginError("まずはログインしてください")
+        return self._api_request("get", f"{BASE_URL}/bff/v1/getSecuritiesBalance", params={"payPayLang": "ja"})
