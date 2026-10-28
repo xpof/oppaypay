@@ -105,11 +105,12 @@ class PayPayLoginMixin:
                 payload_data = polling_json.get("payload", {})
                 request_data = payload_data.get("request", {})
                 data_payload = request_data.get("data", {})
+                
                 if data_payload.get("type") == "VERIFY_QR" or data_payload.get("payload", {}).get("previous_interaction") == "COMPLETE_OTL":
                     log.info("OTL has been approved. Proceeding to complete the flow.")
                     otl_approved = True
                     self._login_headers = headers.copy()
-                    self._complete_otl_flow(headers)
+                    self._complete_otl_flow(headers, request_data)
                     return
                 
                 if not payload_data.get("continue", True):
@@ -124,10 +125,17 @@ class PayPayLoginMixin:
             if not otl_approved:
                 log.warning("OTL polling reached maximum attempts. OTL might not be approved yet.")
                 self._login_headers = headers.copy()
-                
-    def _complete_otl_flow(self, headers):
+
+    def _complete_otl_flow(self, headers, request_data=None):
         log.debug("Completing OTL flow (code-grant/update)...")
-        payload = {"params": {"extension_id": "user-main-2fa-v1", "data": {"type": "COMPLETE_OTL", "payload": None}}}
+        
+        if request_data:
+            payload = {"params": request_data}
+        else:
+            payload = {"params": {"extension_id": "user-main-2fa-v1", "data": {"type": "COMPLETE_OTL", "payload": None}}}
+        
+        log.debug(f"Sending COMPLETE_OTL payload: {payload}")
+        
         update_res = self._web_request("post", f"{PORTAL_URL}/portal/api/v2/oauth2/extension/code-grant/update", headers=headers, json=payload)
         get_uri = update_res.json()
         
@@ -144,7 +152,6 @@ class PayPayLoginMixin:
         self._finish_token_exchange(uri[0].replace("code=", ""))
 
     def login_confirm(self, url: str):
-
         if self.session.headers.get("Authorization"):
             return "already logged in"
         if not self._login_headers:
