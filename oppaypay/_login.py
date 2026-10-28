@@ -93,7 +93,6 @@ class PayPayLoginMixin:
             headers["Referer"] = f"{PORTAL_URL}/portal/oauth2/otl-request?client_id=pay2-mobile-app-client&mode=navigation-2fa"
             
             max_polling_attempts = 12
-            otl_approved = False
             for i in range(max_polling_attempts):
                 polling_res = self._web_request("post", f"{PORTAL_URL}/portal/api/v2/oauth2/extension/code-grant/side-channel/next-action-polling", headers=headers, json={"waitUntil": "PT5S"})
                 polling_json = polling_res.json()
@@ -107,22 +106,38 @@ class PayPayLoginMixin:
                 data_payload = request_data.get("data", {})
                 
                 if data_payload.get("type") == "VERIFY_QR" or data_payload.get("payload", {}).get("previous_interaction") == "COMPLETE_OTL":
-                    log.info("OTL has been approved on the server side. Ready for login_confirm.")
-                    otl_approved = True
+                    log.info("OTL has been approved. Completing flow directly...")
                     self._login_headers = headers.copy()
-                    return  
+                    self._complete_otl_flow(headers)
+                    return
                 
                 if not payload_data.get("continue", True):
-                    log.info("OTL polling completed without explicit approval signal.")
-                    otl_approved = True
+                    log.info("OTL polling completed. Completing flow directly...")
                     self._login_headers = headers.copy()
+                    self._complete_otl_flow(headers)
                     return
                 
                 time.sleep(1)
             
-            if not otl_approved:
-                log.warning("OTL polling reached maximum attempts. OTL might not be approved yet.")
-                self._login_headers = headers.copy()
+            log.warning("OTL polling reached maximum attempts. OTL might not be approved yet.")
+            self._login_headers = headers.copy()
+
+    def _complete_otl_flow(self, headers):
+        log.debug("Sending COMPLETE_OTL (code-grant/update)...")
+        payload = {"params": {"extension_id": "user-main-2fa-v1", "data": {"type": "COMPLETE_OTL", "payload": None}}}
+        update_res = self._web_request("post", f"{PORTAL_URL}/portal/api/v2/oauth2/extension/code-grant/update", headers=headers, json=payload)
+        get_uri = update_res.json()
+        log.debug(f"COMPLETE_OTL response: {get_uri}")
+        
+        if get_uri["header"]["resultCode"] != "S0000":
+            raise OpPayPayLoginError(get_uri)
+            
+        try:
+            uri = get_uri["payload"]["redirect_uri"].replace("paypay://oauth2/callback?", "").split("&")
+        except Exception:
+            raise OpPayPayLoginError('redirect_uriが見つかりませんでした\n' + str(get_uri))
+            
+        self._finish_token_exchange(uri[0].replace("code=", ""))
 
     def login_confirm(self, url: str):
         if self.session.headers.get("Authorization"):
@@ -147,21 +162,7 @@ class PayPayLoginMixin:
         if verify_json["header"]["resultCode"] != "S0000":
             raise OpPayPayLoginError(verify_json)
             
-        log.debug("Completing OTL flow (code-grant/update)...")
-        payload = {"params": {"extension_id": "user-main-2fa-v1", "data": {"type": "COMPLETE_OTL", "payload": None}}}
-        update_res = self._web_request("post", f"{PORTAL_URL}/portal/api/v2/oauth2/extension/code-grant/update", headers=headers, json=payload)
-        get_uri = update_res.json()
-        log.debug(f"COMPLETE_OTL response: {get_uri}")
-        
-        if get_uri["header"]["resultCode"] != "S0000":
-            raise OpPayPayLoginError(get_uri)
-            
-        try:
-            uri = get_uri["payload"]["redirect_uri"].replace("paypay://oauth2/callback?", "").split("&")
-        except Exception:
-            raise OpPayPayLoginError('redirect_uriが見つかりませんでした\n' + str(get_uri))
-            
-        self._finish_token_exchange(uri[0].replace("code=", ""))
+        self._complete_otl_flow(headers)
 
     def _finish_token_exchange(self, code: str):
         log.debug("Exchanging authorization code for tokens...")
