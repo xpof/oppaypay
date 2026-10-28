@@ -129,8 +129,16 @@ class PayPayLoginMixin:
     def _complete_otl_flow(self, headers, request_data=None):
         log.debug("Completing OTL flow (code-grant/update)...")
         
-        if request_data:
-            payload = {"params": request_data}
+        if request_data and "extension_id" in request_data:
+            payload = {
+                "params": {
+                    "extension_id": request_data["extension_id"],
+                    "data": {
+                        "type": "COMPLETE_OTL",
+                        "payload": None
+                    }
+                }
+            }
         else:
             payload = {"params": {"extension_id": "user-main-2fa-v1", "data": {"type": "COMPLETE_OTL", "payload": None}}}
         
