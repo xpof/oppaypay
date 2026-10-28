@@ -50,7 +50,7 @@ class PayPayCore:
         self._login_headers: dict = {}
         
         self.session = curl_requests.Session(
-            impersonate="safari_ios_18_0",
+            impersonate="safari_ios_17_2",
             proxies={"http": proxy, "https": proxy} if proxy else None,
             timeout=30,
         )
