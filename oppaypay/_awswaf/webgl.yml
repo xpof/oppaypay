@@ -3,11 +3,16 @@ gpus:
     model: "Apple GPU"
     extensions: "WEBGL_debug_renderer_info WEBGL_lose_context OES_texture_float OES_texture_half_float OES_standard_derivatives ANGLE_instanced_arrays EXT_shader_texture_lod WEBGL_compressed_texture_pvrtc"
     platform: "ios"
-    
+     
   - vendor: "Apple"
     model: "Apple A18 GPU"
     extensions: "WEBGL_debug_renderer_info WEBGL_lose_context OES_texture_float OES_texture_half_float OES_standard_derivatives ANGLE_instanced_arrays EXT_shader_texture_lod WEBGL_compressed_texture_pvrtc WEBGL_compressed_texture_astc"
     platform: "ios"
+
+  - vendor: "Apple"
+    model: "Apple M3 Max"
+    extensions: "WEBGL_debug_renderer_info WEBGL_lose_context OES_texture_float OES_texture_half_float OES_standard_derivatives ANGLE_instanced_arrays EXT_shader_texture_lod WEBGL_compressed_texture_s3tc WEBGL_compressed_texture_astc"
+    platform: "macos"
 
   - vendor: "Qualcomm"
     model: "Adreno (TM) 640"
@@ -17,6 +22,11 @@ gpus:
   - vendor: "Qualcomm"
     model: "Adreno (TM) 730"
     extensions: "WEBGL_debug_renderer_info WEBGL_lose_context OES_texture_float OES_texture_half_float OES_standard_derivatives OES_element_index_uint ANGLE_instanced_arrays EXT_shader_texture_lod WEBGL_compressed_texture_astc"
+    platform: "android"
+
+  - vendor: "Qualcomm"
+    model: "Adreno (TM) 750"
+    extensions: "WEBGL_debug_renderer_info WEBGL_lose_context OES_texture_float OES_texture_half_float OES_standard_derivatives OES_element_index_uint ANGLE_instanced_arrays EXT_shader_texture_lod WEBGL_compressed_texture_astc WEBGL_compressed_texture_etc1"
     platform: "android"
 
   - vendor: "ARM"
@@ -29,12 +39,47 @@ gpus:
     extensions: "WEBGL_debug_renderer_info WEBGL_lose_context OES_texture_float OES_texture_half_float OES_standard_derivatives OES_element_index_uint ANGLE_instanced_arrays EXT_shader_texture_lod WEBGL_compressed_texture_astc"
     platform: "android"
 
+  - vendor: "ARM"
+    model: "Immortalis-G715"
+    extensions: "WEBGL_debug_renderer_info WEBGL_lose_context OES_texture_float OES_texture_half_float OES_standard_derivatives OES_element_index_uint ANGLE_instanced_arrays EXT_shader_texture_lod WEBGL_compressed_texture_astc"
+    platform: "android"
+
   - vendor: "Intel Inc."
     model: "Intel Iris Xe Graphics"
+    extensions: "WEBGL_debug_renderer_info WEBGL_lose_context OES_texture_float OES_texture_half_float OES_standard_derivatives ANGLE_instanced_arrays EXT_shader_texture_lod WEBGL_compressed_texture_s3tc"
+    platform: "windows"
+
+  - vendor: "Intel Inc."
+    model: "Intel(R) Arc(TM) A770 Graphics"
+    extensions: "WEBGL_debug_renderer_info WEBGL_lose_context OES_texture_float OES_texture_half_float OES_standard_derivatives ANGLE_instanced_arrays EXT_shader_texture_lod WEBGL_compressed_texture_s3tc WEBGL_compressed_texture_s3tc_srgb"
+    platform: "windows"
+
+  - vendor: "Intel Inc."
+    model: "Intel(R) HD Graphics 620"
     extensions: "WEBGL_debug_renderer_info WEBGL_lose_context OES_texture_float OES_texture_half_float OES_standard_derivatives ANGLE_instanced_arrays EXT_shader_texture_lod WEBGL_compressed_texture_s3tc"
     platform: "windows"
 
   - vendor: "NVIDIA Corporation"
     model: "NVIDIA GeForce RTX 3080"
     extensions: "WEBGL_debug_renderer_info WEBGL_lose_context OES_texture_float OES_texture_half_float OES_standard_derivatives ANGLE_instanced_arrays EXT_shader_texture_lod WEBGL_compressed_texture_s3tc"
+    platform: "windows"
+
+  - vendor: "NVIDIA Corporation"
+    model: "NVIDIA GeForce RTX 4090"
+    extensions: "WEBGL_debug_renderer_info WEBGL_lose_context OES_texture_float OES_texture_half_float OES_standard_derivatives ANGLE_instanced_arrays EXT_shader_texture_lod WEBGL_compressed_texture_s3tc WEBGL_compressed_texture_s3tc_srgb"
+    platform: "windows"
+
+  - vendor: "NVIDIA Corporation"
+    model: "NVIDIA GeForce GTX 1060"
+    extensions: "WEBGL_debug_renderer_info WEBGL_lose_context OES_texture_float OES_texture_half_float OES_standard_derivatives ANGLE_instanced_arrays EXT_shader_texture_lod WEBGL_compressed_texture_s3tc"
+    platform: "windows"
+
+  - vendor: "AMD"
+    model: "AMD Radeon RX 6700 XT"
+    extensions: "WEBGL_debug_renderer_info WEBGL_lose_context OES_texture_float OES_texture_half_float OES_standard_derivatives ANGLE_instanced_arrays EXT_shader_texture_lod WEBGL_compressed_texture_s3tc"
+    platform: "windows"
+
+  - vendor: "AMD"
+    model: "AMD Radeon RX 7900 XTX"
+    extensions: "WEBGL_debug_renderer_info WEBGL_lose_context OES_texture_float OES_texture_half_float OES_standard_derivatives ANGLE_instanced_arrays EXT_shader_texture_lod WEBGL_compressed_texture_s3tc WEBGL_compressed_texture_s3tc_srgb"
     platform: "windows"
