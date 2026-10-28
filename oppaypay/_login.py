@@ -1,5 +1,6 @@
 import pkce
 import logging
+import time
 from ._core import VERSION, BASE_URL, PORTAL_URL
 from .exceptions import OpPayPayLoginError
 from ._sensors import update_header_device_state
@@ -90,17 +91,29 @@ class PayPayLoginMixin:
             
             log.debug("Requesting OTL generation (polling)...")
             headers["Referer"] = f"{PORTAL_URL}/portal/oauth2/otl-request?client_id=pay2-mobile-app-client&mode=navigation-2fa"
-            polling_res = self._web_request("post", f"{PORTAL_URL}/portal/api/v2/oauth2/extension/code-grant/side-channel/next-action-polling", headers=headers, json={"waitUntil": "PT5S"})
             
-            # ★ 追加：OTL発行の確認用デバッグログ
-            log.debug(f"OTL polling status: {polling_res.status_code}")
-            log.debug(f"OTL polling response: {polling_res.text[:1000]}")
-            
-            if polling_res.json()["header"]["resultCode"] != "S0000":
-                raise OpPayPayLoginError(polling_res.json())
+            max_polling_attempts = 12  
+            otl_issued = False
+            for i in range(max_polling_attempts):
+                polling_res = self._web_request("post", f"{PORTAL_URL}/portal/api/v2/oauth2/extension/code-grant/side-channel/next-action-polling", headers=headers, json={"waitUntil": "PT5S"})
+                polling_json = polling_res.json()
+                log.debug(f"OTL polling response (attempt {i+1}/{max_polling_attempts}): {polling_json}")
                 
-            log.info("OTL request sent. Please check your SMS/app notifications.")
+                if polling_json["header"]["resultCode"] != "S0000":
+                    raise OpPayPayLoginError(polling_json)
+                
+                payload_data = polling_json.get("payload", {})
+                if not payload_data.get("continue", True):
+                    log.info("OTL polling completed. OTL should be issued.")
+                    otl_issued = True
+                    break
+                time.sleep(1)
             
+            if not otl_issued:
+                log.warning("OTL polling reached maximum attempts. OTL might not be issued yet.")
+            else:
+                log.info("OTL request sent. Please check your SMS/app notifications.")
+                
         self._login_headers = headers.copy()
 
     def login_confirm(self, url: str):
@@ -122,7 +135,6 @@ class PayPayLoginMixin:
         verify_res = self._web_request("post", f"{PORTAL_URL}/portal/api/v2/oauth2/extension/sign-in/2fa/otl/verify", headers=headers, json={"code": url})
         
         verify_json = verify_res.json()
-        # ★ 追加：OTL検証エラーの詳細確認
         log.debug(f"OTL verify response: {verify_json}")
         
         if verify_json["header"]["resultCode"] != "S0000":
@@ -133,7 +145,6 @@ class PayPayLoginMixin:
         update_res = self._web_request("post", f"{PORTAL_URL}/portal/api/v2/oauth2/extension/code-grant/update", headers=headers, json=payload)
         get_uri = update_res.json()
         
-        # ★ 追加：リダイレクトURI取得の確認
         log.debug(f"COMPLETE_OTL response: {get_uri}")
         
         if get_uri["header"]["resultCode"] != "S0000":
