@@ -2,7 +2,6 @@
 
 # oppaypay v.0.4.3
 
-oppaypay v0.4.3
 ---
 
 ### v0.4.3 の変更点
