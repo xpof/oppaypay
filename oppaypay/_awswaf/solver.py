@@ -98,19 +98,39 @@ class AwsWafSolver:
         return res["token"]
 
 def solve_aws_waf_challenge(html: str, user_agent: str, domain: str = "www.paypay.ne.jp") -> str:
-    match_props = re.search(r'window\.gokuProps\s*=\s*({.*?});', html)
-    if not match_props: raise ValueError("gokuProps not found in HTML")
-    goku_props = json.loads(match_props.group(1))
-    
+
+    match_props = re.search(r'window\.gokuProps\s*=\s*({.*?});', html, re.DOTALL)
+    goku_props = None
+    if match_props:
+        try:
+            goku_props = json.loads(match_props.group(1))
+            log.info("gokuProps found in HTML")
+        except json.JSONDecodeError as e:
+            log.warning(f"Failed to parse gokuProps: {e}")
+
+    match_host = re.search(r'src=["\']https://([^/]+)/challenge\.js', html)
+    if not match_host:
+        match_captcha = re.search(r'src=["\']https://([^/]+)/captcha\.js', html)
+        if match_captcha:
+            raise ValueError(
+                "AWS WAF CAPTCHA detected (captcha.js). "
+                "This solver only supports challenge.js. "
+                "Manual intervention or external CAPTCHA solving is required."
+            )
+        match_host = re.search(r'https://([^/]+)/', html)
+        if not match_host:
+            raise ValueError("WAF endpoint host not found in HTML")
+
+    endpoint = match_host.group(1)
+
+    if goku_props is None:
+        log.warning("gokuProps not found. Proceeding with empty goku_props.")
+        goku_props = {}
+
     try:
         update_key_from_goku_props(goku_props)
     except Exception as e:
         log.debug(f"Failed to update WAF key: {e}")
 
-    match_host = re.search(r'src=["\']https://([^/]+)/challenge\.js', html)
-    if not match_host: match_host = re.search(r'https://([^/]+)/', html)
-    if not match_host: raise ValueError("WAF endpoint host not found in HTML")
-    
-    endpoint = match_host.group(1)
     solver = AwsWafSolver(goku_props, endpoint, domain, user_agent)
     return solver.solve()
