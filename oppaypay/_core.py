@@ -299,14 +299,24 @@ class PayPayCore:
             headers["Referer"] = f"{PORTAL_URL}/portal/oauth2/l?id={url}&client_id=pay2-mobile-app-client"
             verify_res = self._web_request("post", f"{PORTAL_URL}/portal/api/v2/oauth2/extension/sign-in/2fa/otl/verify", headers=headers, json={"code": url})
             
-        if verify_res.json()["header"]["resultCode"] != "S0000":
-            raise OpPayPayLoginError(verify_res.json())
+        # JSON パースエラーの詳細を把握するための修正
+        try:
+            res_json = verify_res.json()
+        except Exception as e:
+            raise OpPayPayLoginError(f"OTP検証APIがJSONを返しませんでした。Status: {verify_res.status_code}, Body: {verify_res.text[:300]}")
+            
+        if res_json.get("header", {}).get("resultCode") != "S0000":
+            raise OpPayPayLoginError(res_json)
             
         payload = {"params": {"extension_id": "user-main-2fa-v1", "data": {"type": "COMPLETE_OTL", "payload": None}}}
         update_res = self._web_request("post", f"{PORTAL_URL}/portal/api/v2/oauth2/extension/code-grant/update", headers=headers, json=payload)
-        get_uri = update_res.json()
         
-        if get_uri["header"]["resultCode"] != "S0000":
+        try:
+            get_uri = update_res.json()
+        except Exception as e:
+            raise OpPayPayLoginError(f"サーバーがJSONを返しませんでした。Status: {update_res.status_code}, Body: {update_res.text[:300]}")
+            
+        if get_uri.get("header", {}).get("resultCode") != "S0000":
             raise OpPayPayLoginError(get_uri)
             
         try:
