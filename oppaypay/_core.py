@@ -49,8 +49,8 @@ class PayPayCore:
         self._mental_focus = secrets.randbelow(1000) / 1000.0
         self._login_headers: dict = {}
         
-        self.session = curl_requests.Session(
-            impersonate="safari_ios",
+            self.session = curl_requests.Session(
+            impersonate=select_profile("Mozilla/5.0 (iPhone; CPU iPhone OS 26_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/23G71"),
             proxies={"http": proxy, "https": proxy} if proxy else None,
             timeout=30,
         )
@@ -210,6 +210,8 @@ class PayPayCore:
                 
         return response
 
+
+
     def login_start(self):
         if not self.phone:
             raise OpPayPayLoginError("電話番号を入力してください")
@@ -325,35 +327,10 @@ class PayPayCore:
                 raise OpPayPayLoginError(update_res2.json())
                 
             headers["Referer"] = f"{PORTAL_URL}/portal/oauth2/otl-request?client_id=pay2-mobile-app-client&mode=navigation-2fa"
-            
-            max_polling_attempts = 12
-            for poll_attempt in range(max_polling_attempts):
-                polling_res = self._web_request("post", f"{PORTAL_URL}/portal/api/v2/oauth2/extension/code-grant/side-channel/next-action-polling", headers=headers, json={"waitUntil": "PT5S"})
-                polling_data = polling_res.json()
+            polling_res = self._web_request("post", f"{PORTAL_URL}/portal/api/v2/oauth2/extension/code-grant/side-channel/next-action-polling", headers=headers, json={"waitUntil": "PT5S"})
+            if polling_res.json()["header"]["resultCode"] != "S0000":
+                raise OpPayPayLoginError(polling_res.json())
                 
-                if polling_data["header"]["resultCode"] != "S0000":
-                    raise OpPayPayLoginError(polling_data)
-                    
-                request_payload = polling_data.get("payload", {}).get("request", {})
-                data_payload = request_payload.get("data", {})
-                
-                if data_payload.get("type") == "COMPLETE_OTL":
-                    redirect_uri = data_payload.get("payload", {}).get("redirect_uri")
-                    if not redirect_uri:
-                        raise OpPayPayLoginError("redirect_uriが見つかりませんでした")
-                    
-                    if "paypay://oauth2/callback?code=" in redirect_uri:
-                        code = redirect_uri.split("code=")[1].split("&")[0]
-                        self._finish_token_exchange(code)
-                        log.info("QRコードによるログイン認証が完了しました。")
-                        self._login_headers = headers.copy()
-                        return
-                
-                log.info(f"QRコードでの承認待ち... ({poll_attempt + 1}/{max_polling_attempts})")
-                time.sleep(5)
-                
-            raise OpPayPayLoginError("OTL承認のタイムアウト。QRコードをスキャンしてください。")
-            
         self._login_headers = headers.copy()
 
     def login_confirm(self, url: str):
@@ -362,17 +339,26 @@ class PayPayCore:
             
         if not self._login_headers:
             raise OpPayPayLoginError("ログインフローが開始されていません。先に login_start を実行してください。")
-            
+        
+        is_otp = False
         if "https://" in url:
             if "id=" in url:
                 url = url.split("id=")[-1]
             else:
                 raise OpPayPayLoginError("無効な確認URLです")
-                
+        elif url.upper().startswith("RY-") or (len(url) == 6 and url.isalnum()):
+            is_otp = True
+            url = url.upper().replace("-", "")
+            
         headers = self._login_headers.copy()
-        headers["Referer"] = f"{PORTAL_URL}/portal/oauth2/l?id={url}&client_id=pay2-mobile-app-client"
         
-        verify_res = self._web_request("post", f"{PORTAL_URL}/portal/api/v2/oauth2/extension/sign-in/2fa/otl/verify", headers=headers, json={"code": url})
+        if is_otp:
+            headers["Referer"] = f"{PORTAL_URL}/portal/oauth2/otp-request?client_id=pay2-mobile-app-client&mode=navigation-2fa"
+            verify_res = self._web_request("post", f"{PORTAL_URL}/portal/api/v2/oauth2/extension/sign-in/2fa/otp/verify", headers=headers, json={"code": url})
+        else:
+            headers["Referer"] = f"{PORTAL_URL}/portal/oauth2/l?id={url}&client_id=pay2-mobile-app-client"
+            verify_res = self._web_request("post", f"{PORTAL_URL}/portal/api/v2/oauth2/extension/sign-in/2fa/otl/verify", headers=headers, json={"code": url})
+            
         if verify_res.json()["header"]["resultCode"] != "S0000":
             raise OpPayPayLoginError(verify_res.json())
             
@@ -436,6 +422,8 @@ class PayPayCore:
         self.session.headers["content-type"] = "application/json"
         self.session.headers = update_header_device_state(self.session.headers)
         return True
+
+
 
     def alive(self) -> bool:
         if not self.access_token:
