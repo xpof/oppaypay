@@ -50,7 +50,7 @@ class PayPayCore:
         self._login_headers: dict = {}
         
         self.session = curl_requests.Session(
-            impersonate="safari_ios_17_0", 
+            impersonate="safari_ios_18_0",
             proxies={"http": proxy, "https": proxy} if proxy else None,
             timeout=30,
         )
@@ -101,7 +101,6 @@ class PayPayCore:
             self.session.headers["content-type"] = "application/json"
 
     def _human_delay(self, url: str = ""):
-
         if not self.humanize:
             return
 
@@ -211,7 +210,6 @@ class PayPayCore:
                 
         return response
 
-
     def login_start(self):
         if not self.phone:
             raise OpPayPayLoginError("電話番号を入力してください")
@@ -257,7 +255,7 @@ class PayPayCore:
             "Sec-Fetch-User": "?1",
             "Upgrade-Insecure-Requests": "1",
             "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 26_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/23G71",
-            "X-Requested-With": "jp.ne.paypay.app" 
+            "X-Requested-With": "jp.ne.paypay.app"
         }
         
         params = {"client_id": "pay2-mobile-app-client", "request_uri": response["payload"]["requestUri"]}
@@ -349,7 +347,7 @@ class PayPayCore:
                         self._finish_token_exchange(code)
                         log.info("QRコードによるログイン認証が完了しました。")
                         self._login_headers = headers.copy()
-                        return 
+                        return
                 
                 log.info(f"QRコードでの承認待ち... ({poll_attempt + 1}/{max_polling_attempts})")
                 time.sleep(5)
@@ -438,7 +436,7 @@ class PayPayCore:
         self.session.headers["content-type"] = "application/json"
         self.session.headers = update_header_device_state(self.session.headers)
         return True
-        
+
     def alive(self) -> bool:
         if not self.access_token:
             raise OpPayPayLoginError("まずはログインしてください")
