@@ -3,6 +3,7 @@ import time
 import logging
 import secrets
 import hashlib
+import re
 from typing import NamedTuple
 from uuid import uuid4
 from curl_cffi import requests as curl_requests
@@ -269,21 +270,25 @@ class PayPayCore:
                 raise OpPayPayLoginError(polling_res.json())
         self._login_headers = headers.copy()
 
-    def login_confirm(self, url: str):
+    def login_confirm(self, code_or_url: str):
         if self.session.headers.get("Authorization"):
             return "already logged in"
         if not self._login_headers:
             raise OpPayPayLoginError("ログインフローが開始されていません。先に login_start を実行してください。")
         
+        code_or_url = code_or_url.strip()
         is_otp = False
-        if "https://" in url:
-            if "id=" in url:
-                url = url.split("id=")[-1]
+        
+        if code_or_url.startswith("https://"):
+            if "id=" in code_or_url:
+                url = code_or_url.split("id=")[-1]
             else:
                 raise OpPayPayLoginError("無効な確認URLです")
-        elif url.upper().startswith("RY-") or (len(url) == 6 and url.isalnum()):
+        elif re.match(r'^[A-Z]{2}-?\d{4}$', code_or_url.upper()) or (len(code_or_url.replace("-", "")) == 6 and code_or_url.replace("-", "").isalnum()):
             is_otp = True
-            url = url.upper().replace("-", "")
+            url = code_or_url.upper().replace("-", "")
+        else:
+            raise OpPayPayLoginError("無効な認証コードまたはURLです")
             
         headers = self._login_headers.copy()
         
@@ -300,12 +305,15 @@ class PayPayCore:
         payload = {"params": {"extension_id": "user-main-2fa-v1", "data": {"type": "COMPLETE_OTL", "payload": None}}}
         update_res = self._web_request("post", f"{PORTAL_URL}/portal/api/v2/oauth2/extension/code-grant/update", headers=headers, json=payload)
         get_uri = update_res.json()
+        
         if get_uri["header"]["resultCode"] != "S0000":
             raise OpPayPayLoginError(get_uri)
+            
         try:
             uri = get_uri["payload"]["redirect_uri"].replace("paypay://oauth2/callback?", "").split("&")
         except Exception:
             raise OpPayPayLoginError('redirect_uriが見つかりませんでした\n' + str(get_uri))
+            
         self._finish_token_exchange(uri[0].replace("code=", ""))
 
     def _finish_token_exchange(self, code: str):
