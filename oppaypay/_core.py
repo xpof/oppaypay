@@ -25,10 +25,10 @@ PORTAL_URL = "https://www.paypay.ne.jp"
 
 class Balance(NamedTuple):
     money: int | None
-    money_light: int
-    all_balance: int
-    useable_balance: int
-    points: int
+    money_light: int | None
+    all_balance: int | None
+    useable_balance: int | None
+    points: int | None
     raw: dict
 
 class PayPayCore:
@@ -273,7 +273,7 @@ class PayPayCore:
 
     def login_confirm(self, url: str):
         """
-        OTL URLを受け取って、自動で承認処理を行い、ログインを完了させる。
+        OTL URLを受け取り、ブラウザでの承認操作を待機して自動完了させる。
         使い方: core.login_confirm("https://www.paypay.ne.jp/portal/oauth2/l?id=xxxxx")
         """
         if self.session.headers.get("Authorization"):
@@ -287,88 +287,17 @@ class PayPayCore:
         
         headers = self._login_headers.copy()
         
-        # 1. OTL URLにアクセスしてHTMLを取得
-        log.info(f"OTL URLに自動アクセス中: {url}")
-        otl_response = self._web_request("get", url, headers=headers)
-        otl_html = otl_response.text
-        
-        # デバッグ用にHTMLを保存
-        with open("otl_debug.html", "w", encoding="utf-8") as f:
-            f.write(otl_html)
-        log.info(f"HTMLを 'otl_debug.html' に保存しました (length: {len(otl_html)})")
-        
-        # 2. HTMLからCSRFトークンを抽出（複数のパターンを試す）
-        csrf_token = None
-        csrf_patterns = [
-            r'name="csrf_token"\s+value="([^"]+)"',
-            r'name="_csrf"\s+value="([^"]+)"',
-            r'name="csrfToken"\s+value="([^"]+)"',
-            r'<meta\s+name="csrf-token"\s+content="([^"]+)"',
-            r'"csrfToken"\s*:\s*"([^"]+)"',
-            r'"csrf_token"\s*:\s*"([^"]+)"',
-        ]
-        for pattern in csrf_patterns:
-            match = re.search(pattern, otl_html)
-            if match:
-                csrf_token = match.group(1)
-                log.info(f"CSRFトークンを検出: {csrf_token[:20]}...")
-                break
-        
-        # 3. HTMLからフォームアクションを抽出
-        form_action = None
-        form_match = re.search(r'<form[^>]+action="([^"]+)"', otl_html)
-        if form_match:
-            form_action = form_match.group(1)
-            log.info(f"フォームアクションを検出: {form_action}")
-        
-        # 4. HTMLから承認ボタンの情報を抽出
-        approve_value = None
-        approve_patterns = [
-            r'<button[^>]+name="action"[^>]+value="([^"]+)"',
-            r'<input[^>]+type="submit"[^>]+value="([^"]+)"',
-            r'name="action"\s+value="([^"]+)"',
-        ]
-        for pattern in approve_patterns:
-            match = re.search(pattern, otl_html)
-            if match:
-                approve_value = match.group(1)
-                log.info(f"承認ボタンを検出: {approve_value}")
-                break
-        
-        # 5. 承認リクエストを送信
-        if csrf_token and form_action:
-            approve_url = form_action if form_action.startswith("http") else f"{PORTAL_URL}{form_action}"
-            payload = {
-                "csrf_token": csrf_token,
-                "action": approve_value or "approve"
-            }
-            
-            log.info(f"承認リクエスト送信中: {approve_url}")
-            approve_response = self._web_request("post", approve_url, headers=headers, data=payload)
-            log.info(f"承認レスポンス: Status={approve_response.status_code}")
-            
-            # 6. 承認後のレスポンスからredirect_uriを抽出
-            approve_html = approve_response.text
-            redirect_match = re.search(r'paypay://oauth2/callback\?code=([^&"]+)', approve_html)
-            
-            if redirect_match:
-                code = redirect_match.group(1)
-                log.info("承認成功！トークン交換を実行中...")
-                self._finish_token_exchange(code)
-                print("✅ 自動認証が完了しました！")
-                return
-            
-            # redirect_uriが見つからない場合、ポーリングにフォールバック
-            log.warning("redirect_uriが見つかりませんでした。ポーリングにフォールバックします。")
-        else:
-            log.warning(f"HTMLからフォーム情報を抽出できませんでした。")
-            log.warning(f"CSRFトークン: {csrf_token}")
-            log.warning(f"フォームアクション: {form_action}")
-            log.warning("'otl_debug.html' の内容を確認してください。")
-            log.info("ポーリングモードで承認を待機します...")
-        
-        # 7. ポーリングで承認完了を待機（フォールバック）
-        max_polling_attempts = 60
+        print("\n" + "="*70)
+        print("👉 以下の手順で承認を完了させてください：")
+        print(f"   1. PCのブラウザで以下のURLを開いてください：")
+        print(f"      {url}")
+        print("   2. 画面に表示される『承認』ボタンを押してください。")
+        print("      (または、確認コードが表示された場合は、その手順に従ってください)")
+        print("   3. 承認が完了すると、このプログラムが自動的に検知してログインを完了します。")
+        print("="*70 + "\n")
+
+        # 承認完了までポーリングで待機
+        max_polling_attempts = 120 # 最大10分間待機
         for poll_attempt in range(max_polling_attempts):
             polling_res = self._web_request("post", f"{PORTAL_URL}/portal/api/v2/oauth2/extension/code-grant/side-channel/next-action-polling", headers=headers, json={"waitUntil": "PT5S"})
             polling_data = polling_res.json()
@@ -387,14 +316,16 @@ class PayPayCore:
                 if "paypay://oauth2/callback?code=" in redirect_uri:
                     code = redirect_uri.split("code=")[1].split("&")[0]
                     self._finish_token_exchange(code)
-                    print("✅ ログインが完了しました！")
+                    print("\n✅ ブラウザでの承認が検知されました。ログインが完了しました！")
                     self._login_headers = headers.copy()
                     return
             
-            print(f"⏳ 待機中... ({poll_attempt + 1}/{max_polling_attempts})")
+            # 5秒ごとに進捗を表示
+            if poll_attempt % 2 == 0:
+                print(f"⏳ 承認待機中... ({poll_attempt + 1}/{max_polling_attempts}) [ブラウザで承認操作を完了させてください]")
             time.sleep(5)
             
-        raise OpPayPayLoginError("自動認証のタイムアウト。")
+        raise OpPayPayLoginError("承認のタイムアウト。URLを開いて承認操作を行ってください。")
 
     def _finish_token_exchange(self, code: str):
         headers = self.session.headers.copy()
