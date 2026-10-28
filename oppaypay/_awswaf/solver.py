@@ -135,7 +135,10 @@ class AwsWafSolver:
         mp.addpart(name="solution_data", content_type="text/plain", data=solution_data.encode('utf-8'))
         mp.addpart(name="solution_metadata", content_type="application/json", data=metadata_json.encode('utf-8'))
         
-        res = self.session.post(f"https://{urlparse(self.challenge_url).netloc}/mp_verify", multipart=mp)
+        base_url = self.challenge_url.rsplit("/challenge.js", 1)[0]
+        verify_endpoint = f"{base_url}/mp_verify"
+        
+        res = self.session.post(verify_endpoint, multipart=mp)
         try:
             result = res.json()
         except Exception:
@@ -149,7 +152,11 @@ class AwsWafSolver:
 
     def _legacy_verify(self, payload):
         self.session.headers.update({"content-type": "text/plain;charset=UTF-8", "origin": f"https://{self.domain}", "referer": f"https://{self.domain}/"})
-        res = self.session.post(f"https://{urlparse(self.challenge_url).netloc}/verify", json=payload)
+        
+        base_url = self.challenge_url.rsplit("/challenge.js", 1)[0]
+        verify_endpoint = f"{base_url}/verify"
+        
+        res = self.session.post(verify_endpoint, json=payload)
         try:
             result = res.json()
         except Exception:
