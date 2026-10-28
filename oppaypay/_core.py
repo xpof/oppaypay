@@ -256,48 +256,75 @@ class PayPayCore:
                 raise OpPayPayLoginError("登録されていないDevice-UUID、またはリダイレクトURLの解析に失敗")
             self._finish_token_exchange(uri[0].replace("code=", ""))
         else:
-            # 未登録デバイスフロー (OTL)
             update_res = self._web_request("post", f"{PORTAL_URL}/portal/api/v2/oauth2/extension/code-grant/update", headers=headers, json={})
             if update_res.json()["header"]["resultCode"] != "S0000":
                 raise OpPayPayLoginError(update_res.json())
                 
-            headers["Referer"] = f"{PORTAL_URL}/portal/oauth2/verification-method?client_id=pay2-mobile-app-client&mode=navigation-2fa"
-            payload = {"params": {"extension_id": "user-main-2fa-v1", "data": {"type": "SELECT_FLOW", "payload": {"flow": "OTL", "sign_in_method": "MOBILE", "base_url": f"{PORTAL_URL}/portal/oauth2/l"}}}}
-            update_res2 = self._web_request("post", f"{PORTAL_URL}/portal/api/v2/oauth2/extension/code-grant/update", headers=headers, json=payload)
-            if update_res2.json()["header"]["resultCode"] != "S0000":
-                raise OpPayPayLoginError(update_res2.json())
-                
-            log.info("SMSに認証URLが送信されました。login_confirm() にURLを入力して自動認証を行ってください。")
-            
         self._login_headers = headers.copy()
 
-    def login_confirm(self, url: str):
-        """
-        OTL URLを受け取り、ブラウザでの承認操作を待機して自動完了させる。
-        使い方: core.login_confirm("https://www.paypay.ne.jp/portal/oauth2/l?id=xxxxx")
-        """
+    def login_otp(self, otp_code: str):
         if self.session.headers.get("Authorization"):
             return "already logged in"
         if not self._login_headers:
             raise OpPayPayLoginError("ログインフローが開始されていません。先に login_start を実行してください。")
         
-        url = url.strip()
-        if not url.startswith("https://"):
-            raise OpPayPayLoginError("無効なURLです。https://... から始まるURLを入力してください。")
+        headers = self._login_headers.copy()
+        
+        headers["Referer"] = f"{PORTAL_URL}/portal/oauth2/verification-method?client_id=pay2-mobile-app-client&mode=navigation-2fa"
+        payload = {"params": {"extension_id": "user-main-2fa-v1", "data": {"type": "SELECT_FLOW", "payload": {"flow": "OTP", "sign_in_method": "MOBILE"}}}}
+        select_res = self._web_request("post", f"{PORTAL_URL}/portal/api/v2/oauth2/extension/code-grant/update", headers=headers, json=payload)
+        if select_res.json()["header"]["resultCode"] != "S0000":
+            raise OpPayPayLoginError(select_res.json())
+        
+        otp_code = otp_code.strip().upper()
+        log.info(f"OTPコードを送信中: {otp_code}")
+        payload = {"params": {"extension_id": "user-main-2fa-v1", "data": {"type": "VERIFY_OTP", "payload": {"code": otp_code}}}}
+        verify_res = self._web_request("post", f"{PORTAL_URL}/portal/api/v2/oauth2/extension/code-grant/update", headers=headers, json=payload)
+        
+        try:
+            res_json = verify_res.json()
+        except Exception as e:
+            raise OpPayPayLoginError(f"OTP検証APIがJSONを返しませんでした。Status: {verify_res.status_code}, Body: {verify_res.text[:300]}")
+        
+        if res_json.get("header", {}).get("resultCode") != "S0000":
+            raise OpPayPayLoginError(res_json)
+        
+        redirect_uri = res_json.get("payload", {}).get("redirect_uri")
+        if not redirect_uri:
+            raise OpPayPayLoginError("redirect_uriが見つかりませんでした")
+        
+        if "paypay://oauth2/callback?code=" in redirect_uri:
+            code = redirect_uri.split("code=")[1].split("&")[0]
+            self._finish_token_exchange(code)
+            print("✅ OTP認証が完了しました！")
+            self._login_headers = headers.copy()
+            return
+        
+        raise OpPayPayLoginError("OTP認証に失敗しました")
+
+    def login_otl(self):
+        if self.session.headers.get("Authorization"):
+            return "already logged in"
+        if not self._login_headers:
+            raise OpPayPayLoginError("ログインフローが開始されていません。先に login_start を実行してください。")
         
         headers = self._login_headers.copy()
         
-        print("\n" + "="*70)
+        headers["Referer"] = f"{PORTAL_URL}/portal/oauth2/verification-method?client_id=pay2-mobile-app-client&mode=navigation-2fa"
+        payload = {"params": {"extension_id": "user-main-2fa-v1", "data": {"type": "SELECT_FLOW", "payload": {"flow": "OTL", "sign_in_method": "MOBILE", "base_url": f"{PORTAL_URL}/portal/oauth2/l"}}}}
+        select_res = self._web_request("post", f"{PORTAL_URL}/portal/api/v2/oauth2/extension/code-grant/update", headers=headers, json=payload)
+        if select_res.json()["header"]["resultCode"] != "S0000":
+            raise OpPayPayLoginError(select_res.json())
+        
+        headers["Referer"] = f"{PORTAL_URL}/portal/oauth2/otl-request?client_id=pay2-mobile-app-client&mode=navigation-2fa"
+        
+        print(" SMSに認証URLが送信されました。")
         print("👉 以下の手順で承認を完了させてください：")
-        print(f"   1. PCのブラウザで以下のURLを開いてください：")
-        print(f"      {url}")
-        print("   2. 画面に表示される『承認』ボタンを押してください。")
-        print("      (または、確認コードが表示された場合は、その手順に従ってください)")
+        print("   1. スマホでSMSのURLを開いてください。")
+        print("   2. 表示されるQRコードをPayPayアプリでスキャンして『ログインを許可』を押してください。")
         print("   3. 承認が完了すると、このプログラムが自動的に検知してログインを完了します。")
-        print("="*70 + "\n")
 
-        # 承認完了までポーリングで待機
-        max_polling_attempts = 120 # 最大10分間待機
+        max_polling_attempts = 60 
         for poll_attempt in range(max_polling_attempts):
             polling_res = self._web_request("post", f"{PORTAL_URL}/portal/api/v2/oauth2/extension/code-grant/side-channel/next-action-polling", headers=headers, json={"waitUntil": "PT5S"})
             polling_data = polling_res.json()
@@ -316,13 +343,11 @@ class PayPayCore:
                 if "paypay://oauth2/callback?code=" in redirect_uri:
                     code = redirect_uri.split("code=")[1].split("&")[0]
                     self._finish_token_exchange(code)
-                    print("\n✅ ブラウザでの承認が検知されました。ログインが完了しました！")
+                    print("\n✅ ブラウザ/アプリでの承認が検知されました。ログインが完了しました！")
                     self._login_headers = headers.copy()
                     return
             
-            # 5秒ごとに進捗を表示
-            if poll_attempt % 2 == 0:
-                print(f"⏳ 承認待機中... ({poll_attempt + 1}/{max_polling_attempts}) [ブラウザで承認操作を完了させてください]")
+            print(f"⏳ 承認待機中... ({poll_attempt + 1}/{max_polling_attempts})")
             time.sleep(5)
             
         raise OpPayPayLoginError("承認のタイムアウト。URLを開いて承認操作を行ってください。")
