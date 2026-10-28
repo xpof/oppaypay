@@ -256,6 +256,7 @@ class PayPayCore:
                 raise OpPayPayLoginError("登録されていないDevice-UUID、またはリダイレクトURLの解析に失敗")
             self._finish_token_exchange(uri[0].replace("code=", ""))
         else:
+            # 未登録デバイスフロー (OTL)
             update_res = self._web_request("post", f"{PORTAL_URL}/portal/api/v2/oauth2/extension/code-grant/update", headers=headers, json={})
             if update_res.json()["header"]["resultCode"] != "S0000":
                 raise OpPayPayLoginError(update_res.json())
@@ -266,75 +267,134 @@ class PayPayCore:
             if update_res2.json()["header"]["resultCode"] != "S0000":
                 raise OpPayPayLoginError(update_res2.json())
                 
-            headers["Referer"] = f"{PORTAL_URL}/portal/oauth2/otl-request?client_id=pay2-mobile-app-client&mode=navigation-2fa"
-            
-            otl_url = f"{PORTAL_URL}/portal/oauth2/l?client_id=pay2-mobile-app-client"
-            print(f"📱 OTL URL: {otl_url}")
-            print("🔍 自動承認を試みます...")
-            
-            try:
-                otl_response = self._web_request("get", otl_url, headers=headers)
-                otl_html = otl_response.text
-                
-                with open("otl_debug.html", "w", encoding="utf-8") as f:
-                    f.write(otl_html)
-                log.debug(f"OTL HTML saved to otl_debug.html (length: {len(otl_html)})")
-                
-                csrf_match = re.search(r'name="csrf_token"\s+value="([^"]+)"', otl_html)
-                form_action_match = re.search(r'<form[^>]+action="([^"]+)"', otl_html)
-                
-                if csrf_match and form_action_match:
-                    csrf_token = csrf_match.group(1)
-                    form_action = form_action_match.group(1)
-                    log.info(f"CSRF Token found: {csrf_token[:20]}...")
-                    log.info(f"Form action: {form_action}")
-                    
-                    approve_url = f"{PORTAL_URL}{form_action}" if form_action.startswith("/") else form_action
-                    approve_payload = {
-                        "csrf_token": csrf_token,
-                        "action": "approve"
-                    }
-                    
-                    approve_response = self._web_request("post", approve_url, headers=headers, data=approve_payload)
-                    log.info(f"Approval request sent (Status: {approve_response.status_code})")
-                else:
-                    log.warning("Could not extract CSRF token or form action from HTML")
-                    log.warning("Please check otl_debug.html for the actual HTML structure")
-            except Exception as e:
-                log.error(f"Auto-approval failed: {e}")
-                log.info("Falling back to polling mode...")
-            
-            # 承認完了までポーリング
-            print("\n⏳ 承認完了を待機中...")
-            max_polling_attempts = 60
-            for poll_attempt in range(max_polling_attempts):
-                polling_res = self._web_request("post", f"{PORTAL_URL}/portal/api/v2/oauth2/extension/code-grant/side-channel/next-action-polling", headers=headers, json={"waitUntil": "PT5S"})
-                polling_data = polling_res.json()
-                
-                if polling_data["header"]["resultCode"] != "S0000":
-                    raise OpPayPayLoginError(polling_data)
-                    
-                request_payload = polling_data.get("payload", {}).get("request", {})
-                data_payload = request_payload.get("data", {})
-                
-                if data_payload.get("type") == "COMPLETE_OTL":
-                    redirect_uri = data_payload.get("payload", {}).get("redirect_uri")
-                    if not redirect_uri:
-                        raise OpPayPayLoginError("redirect_uriが見つかりませんでした")
-                    
-                    if "paypay://oauth2/callback?code=" in redirect_uri:
-                        code = redirect_uri.split("code=")[1].split("&")[0]
-                        self._finish_token_exchange(code)
-                        print("✅ ログインが完了しました！")
-                        self._login_headers = headers.copy()
-                        return
-                
-                print(f"⏳ 待機中... ({poll_attempt + 1}/{max_polling_attempts})")
-                time.sleep(5)
-                
-            raise OpPayPayLoginError("承認のタイムアウト。")
+            log.info("SMSに認証URLが送信されました。login_confirm() にURLを入力して自動認証を行ってください。")
             
         self._login_headers = headers.copy()
+
+    def login_confirm(self, url: str):
+        """
+        OTL URLを受け取って、自動で承認処理を行い、ログインを完了させる。
+        使い方: core.login_confirm("https://www.paypay.ne.jp/portal/oauth2/l?id=xxxxx")
+        """
+        if self.session.headers.get("Authorization"):
+            return "already logged in"
+        if not self._login_headers:
+            raise OpPayPayLoginError("ログインフローが開始されていません。先に login_start を実行してください。")
+        
+        url = url.strip()
+        if not url.startswith("https://"):
+            raise OpPayPayLoginError("無効なURLです。https://... から始まるURLを入力してください。")
+        
+        headers = self._login_headers.copy()
+        
+        # 1. OTL URLにアクセスしてHTMLを取得
+        log.info(f"OTL URLに自動アクセス中: {url}")
+        otl_response = self._web_request("get", url, headers=headers)
+        otl_html = otl_response.text
+        
+        # デバッグ用にHTMLを保存
+        with open("otl_debug.html", "w", encoding="utf-8") as f:
+            f.write(otl_html)
+        log.info(f"HTMLを 'otl_debug.html' に保存しました (length: {len(otl_html)})")
+        
+        # 2. HTMLからCSRFトークンを抽出（複数のパターンを試す）
+        csrf_token = None
+        csrf_patterns = [
+            r'name="csrf_token"\s+value="([^"]+)"',
+            r'name="_csrf"\s+value="([^"]+)"',
+            r'name="csrfToken"\s+value="([^"]+)"',
+            r'<meta\s+name="csrf-token"\s+content="([^"]+)"',
+            r'"csrfToken"\s*:\s*"([^"]+)"',
+            r'"csrf_token"\s*:\s*"([^"]+)"',
+        ]
+        for pattern in csrf_patterns:
+            match = re.search(pattern, otl_html)
+            if match:
+                csrf_token = match.group(1)
+                log.info(f"CSRFトークンを検出: {csrf_token[:20]}...")
+                break
+        
+        # 3. HTMLからフォームアクションを抽出
+        form_action = None
+        form_match = re.search(r'<form[^>]+action="([^"]+)"', otl_html)
+        if form_match:
+            form_action = form_match.group(1)
+            log.info(f"フォームアクションを検出: {form_action}")
+        
+        # 4. HTMLから承認ボタンの情報を抽出
+        approve_value = None
+        approve_patterns = [
+            r'<button[^>]+name="action"[^>]+value="([^"]+)"',
+            r'<input[^>]+type="submit"[^>]+value="([^"]+)"',
+            r'name="action"\s+value="([^"]+)"',
+        ]
+        for pattern in approve_patterns:
+            match = re.search(pattern, otl_html)
+            if match:
+                approve_value = match.group(1)
+                log.info(f"承認ボタンを検出: {approve_value}")
+                break
+        
+        # 5. 承認リクエストを送信
+        if csrf_token and form_action:
+            approve_url = form_action if form_action.startswith("http") else f"{PORTAL_URL}{form_action}"
+            payload = {
+                "csrf_token": csrf_token,
+                "action": approve_value or "approve"
+            }
+            
+            log.info(f"承認リクエスト送信中: {approve_url}")
+            approve_response = self._web_request("post", approve_url, headers=headers, data=payload)
+            log.info(f"承認レスポンス: Status={approve_response.status_code}")
+            
+            # 6. 承認後のレスポンスからredirect_uriを抽出
+            approve_html = approve_response.text
+            redirect_match = re.search(r'paypay://oauth2/callback\?code=([^&"]+)', approve_html)
+            
+            if redirect_match:
+                code = redirect_match.group(1)
+                log.info("承認成功！トークン交換を実行中...")
+                self._finish_token_exchange(code)
+                print("✅ 自動認証が完了しました！")
+                return
+            
+            # redirect_uriが見つからない場合、ポーリングにフォールバック
+            log.warning("redirect_uriが見つかりませんでした。ポーリングにフォールバックします。")
+        else:
+            log.warning(f"HTMLからフォーム情報を抽出できませんでした。")
+            log.warning(f"CSRFトークン: {csrf_token}")
+            log.warning(f"フォームアクション: {form_action}")
+            log.warning("'otl_debug.html' の内容を確認してください。")
+            log.info("ポーリングモードで承認を待機します...")
+        
+        # 7. ポーリングで承認完了を待機（フォールバック）
+        max_polling_attempts = 60
+        for poll_attempt in range(max_polling_attempts):
+            polling_res = self._web_request("post", f"{PORTAL_URL}/portal/api/v2/oauth2/extension/code-grant/side-channel/next-action-polling", headers=headers, json={"waitUntil": "PT5S"})
+            polling_data = polling_res.json()
+            
+            if polling_data["header"]["resultCode"] != "S0000":
+                raise OpPayPayLoginError(polling_data)
+                
+            request_payload = polling_data.get("payload", {}).get("request", {})
+            data_payload = request_payload.get("data", {})
+            
+            if data_payload.get("type") == "COMPLETE_OTL":
+                redirect_uri = data_payload.get("payload", {}).get("redirect_uri")
+                if not redirect_uri:
+                    raise OpPayPayLoginError("redirect_uriが見つかりませんでした")
+                
+                if "paypay://oauth2/callback?code=" in redirect_uri:
+                    code = redirect_uri.split("code=")[1].split("&")[0]
+                    self._finish_token_exchange(code)
+                    print("✅ ログインが完了しました！")
+                    self._login_headers = headers.copy()
+                    return
+            
+            print(f"⏳ 待機中... ({poll_attempt + 1}/{max_polling_attempts})")
+            time.sleep(5)
+            
+        raise OpPayPayLoginError("自動認証のタイムアウト。")
 
     def _finish_token_exchange(self, code: str):
         headers = self.session.headers.copy()
