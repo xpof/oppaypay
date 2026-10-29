@@ -1,3 +1,4 @@
+<img width="1677" height="767" alt="スクリーンショット 2026-10-29 165934" src="https://github.com/user-attachments/assets/5a046a20-a012-4bd5-bc17-6725f13626d2" />
 <img width="91" height="89" alt="logo" src="https://github.com/user-attachments/assets/cfafe8d9-4e3d-4975-b39c-ecb920d6e9ec" />  
 
 # oppaypay v.0.4.3
@@ -195,8 +196,9 @@ except OpPayPayRateLimitError:
 
 ---
 
+
 <div align="center">
-  <a href="https://imgur.com/a/tKZk8qj">https://imgur.com/a/tKZk8qj</a>
+  <a href="https://github.com/user-attachments/assets/1fbdb184-f14b-4683-a53a-d1bdf02673b0">iPhone 17e </a>
 </div>
 
 ---
