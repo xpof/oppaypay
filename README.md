@@ -195,5 +195,11 @@ except OpPayPayRateLimitError:
 
 ---
 
+<div align="center">
+  <a href="https://imgur.com/a/tKZk8qj">https://imgur.com/a/tKZk8qj</a>
+</div>
+
+---
+
 ### ライセンス
 MIT License
