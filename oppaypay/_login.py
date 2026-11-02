@@ -1,3 +1,4 @@
+# _core.pyへ一曲集中させたため_login.pyが空洞化してる🥶
 import pkce
 import logging
 import time
