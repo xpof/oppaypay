@@ -4,6 +4,7 @@ import logging
 import secrets
 import hashlib
 import re
+import threading
 from typing import NamedTuple, List, Dict, Any, Optional
 from uuid import uuid4
 from curl_cffi import requests as curl_requests
@@ -11,6 +12,7 @@ import pkce
 from ._fingerprint import select_profile
 from ._sensors import generate_device_state, update_header_device_state
 from ._awswaf import solve_aws_waf_challenge
+from ._alive_request import AliveSimulator
 from .exceptions import (
     OpPayPayError, OpPayPayLoginError, OpPayPayNetworkError,
     OpPayPayBotDetectedError, OpPayPayEKYCRequiredError,
@@ -53,6 +55,10 @@ class PayPayCore:
         self._mental_focus = secrets.randbelow(1000) / 1000.0
         self._login_headers: dict = {}
         
+        self._alive_simulator: AliveSimulator | None = None
+        self._alive_thread: threading.Thread | None = None
+        self._alive_stop_event = threading.Event()
+
         web_ua = "Mozilla/5.0 (iPhone; CPU iPhone OS 26_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/23G71"
         self.session = curl_requests.Session(
             impersonate=select_profile(web_ua),
@@ -60,7 +66,7 @@ class PayPayCore:
             timeout=30,
         )
         
-        self.access_token: str | None = None
+        self.access_token: str | None = access_token
         self.code_verifier: str | None = None
         
         device_state = generate_device_state()
@@ -99,8 +105,7 @@ class PayPayCore:
             "User-Agent": f"PaypayApp/{VERSION} iPhone17e"
         }
         
-        if access_token:
-            self.access_token = access_token
+        if self.access_token:
             self.session.headers["Authorization"] = f"Bearer {self.access_token}"
             self.session.headers["content-type"] = "application/json"
 
@@ -133,6 +138,8 @@ class PayPayCore:
                     response = self.session.get(url, **kwargs)
                 elif method.lower() == "post":
                     response = self.session.post(url, **kwargs)
+                elif method.lower() == "delete":
+                    response = self.session.delete(url, **kwargs)
                 else:
                     raise ValueError("Invalid HTTP method.")
                 
@@ -196,6 +203,43 @@ class PayPayCore:
             else:
                 response = self.session.post(url, headers=headers, allow_redirects=allow_redirects, **kwargs)
         return response
+
+ 
+    def start_alive_simulator(self, duration_minutes: int = 60, loop: bool = True):
+
+        if self._alive_thread and self._alive_thread.is_alive():
+            log.warning("AliveSimulator はすでに起動しています。")
+            return
+
+        if not self._alive_simulator:
+            self._alive_simulator = AliveSimulator(self)
+            
+        self._alive_stop_event.clear()
+
+        def _run():
+            log.info("🌱 バックグラウンドで AliveSimulator を開始しました。")
+            while not self._alive_stop_event.is_set():
+                try:
+                    self._alive_simulator.simulate_session(duration_minutes=duration_minutes)
+                except Exception as e:
+                    log.error(f"AliveSimulator 実行中にエラー: {e}")
+                    time.sleep(10)
+                
+                if not loop:
+                    break
+            log.info("🌿 AliveSimulator を停止しました。")
+
+        self._alive_thread = threading.Thread(target=_run, daemon=True)
+        self._alive_thread.start()
+
+    def stop_alive_simulator(self):
+        if self._alive_thread and self._alive_thread.is_alive():
+            log.info("AliveSimulator の停止シグナルを送信しました...")
+            self._alive_stop_event.set()
+            self._alive_thread.join(timeout=10) 
+            self._alive_thread = None
+        else:
+            log.info("AliveSimulator は起動していません。")
 
 
     def login_start(self):
@@ -499,8 +543,6 @@ class PayPayCore:
             raw=response
         )
 
-  
-
     def create_p2pcode(self, amount: int = None):
         if not self.access_token: 
             raise OpPayPayLoginError("まずはログインしてください")
@@ -569,8 +611,6 @@ class PayPayCore:
         }
         return self._api_request("post", f"{BASE_URL}/p2p/v1/sendMoney", json=payload, params={"payPayLang": "ja"})
 
-
-
     def charge_money(self, amount: int, payment_method_id: str):
         if not self.access_token:
             raise OpPayPayLoginError("まずはログインしてください")
@@ -604,8 +644,6 @@ class PayPayCore:
             raise OpPayPayLoginError("まずはログインしてください")
         return self._api_request("get", f"{BASE_URL}/bff/v1/getRegisteredCards", params={"payPayLang": "ja"})
 
-
-
     def get_profile(self):
         if not self.access_token:
             raise OpPayPayLoginError("まずはログインしてください")
@@ -636,7 +674,6 @@ class PayPayCore:
         if not self.access_token:
             raise OpPayPayLoginError("まずはログインしてください")
         return self._api_request("get", f"{BASE_URL}/bff/v1/getCoupons", params={"payPayLang": "ja"})
-
 
 
     def get_transaction_history(self, limit: int = 20, offset: int = 0):
