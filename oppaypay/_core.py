@@ -326,67 +326,110 @@ class PayPayCore:
         if "otp-after-otl" in code_or_url:
             parsed = urlparse(code_or_url)
             qs = parse_qs(parsed.query)
-            prefix = qs.get("prefix", [""])[0]
+            prefix = qs.get("prefix", [""])[0].upper()
             otp = qs.get("otp", [""])[0]
             if not prefix or not otp:
                 raise OpPayPayLoginError("URLから prefix または otp を抽出できませんでした。")
-            otl_code = f"{prefix}-{otp}"
-            log.info(f"otp-after-otl URLから認証コードを抽出: {otl_code}")
+            log.info(f"otp-after-otl URLから抽出: prefix={prefix}, otp={otp}")
         
         elif "https://" in code_or_url:
             if "id=" in code_or_url:
                 otl_code = code_or_url.split("id=")[-1].split("&")[0].strip()
+                return self._login_confirm_otl_url(otl_code)
             else:
-                raise OpPayPayLoginError("無効なURLです。id= または otp-after-otl パラメータが含まれていません。")
-            log.info(f"OTL URLから検証コードを抽出: {otl_code}")
+                raise OpPayPayLoginError("無効なURLです。")
         
         else:
-            otl_code = code_or_url.strip().upper()
-            log.info(f"認証コードを直接送信: {otl_code}")
-
-        if not re.fullmatch(r"[A-Z]{2}-\d{4}", otl_code):
-            raise OpPayPayLoginError(
-                f"認証コードの形式が正しくありません: {otl_code}\n"
-                "「EW-9048」または「EW9048」の形式で入力してください。"
-            )
+            code_clean = code_or_url.strip().upper().replace("-", "")
+            if len(code_clean) == 6:
+                prefix, otp = code_clean[:2], code_clean[2:]
+            else:
+                raise OpPayPayLoginError("コード形式が不正です。SG-7429 または SG7429 の形式で入力してください。")
 
         headers = self._login_headers.copy()
-        headers["Referer"] = f"{PORTAL_URL}/portal/oauth2/otp-after-otl?prefix={otl_code[:2]}&otp={otl_code[3:]}"
-        
-        log.info(f"VERIFY_OTP を送信中: {otl_code}")
+        headers["Referer"] = f"{PORTAL_URL}/portal/oauth2/otp-after-otl?prefix={prefix}&otp={otp}"
+
+        log.info("VERIFY_OTP (パターン1: prefix & otp 分離) を送信中...")
         payload = {
             "params": {
                 "extension_id": "user-main-2fa-v1",
-                "data": {"type": "VERIFY_OTP", "payload": {"otp": otl_code}},
+                "data": {"type": "VERIFY_OTP", "payload": {"prefix": prefix, "otp": otp}},
             }
         }
-        verify_res = self._web_request("post", f"{PORTAL_URL}/portal/api/v2/oauth2/extension/code-grant/update", headers=headers, json=payload)
-        verify_json = verify_res.json()
-        
-        if verify_json["header"]["resultCode"] != "S0000":
-            log.warning(f"VERIFY_OTP 失敗: {verify_json}")
-            log.info("COMPLETE_OTL を試行します...")
-            payload = {"params": {"extension_id": "user-main-2fa-v1", "data": {"type": "COMPLETE_OTL", "payload": None}}}
-            update_res = self._web_request("post", f"{PORTAL_URL}/portal/api/v2/oauth2/extension/code-grant/update", headers=headers, json=payload)
-            get_uri = update_res.json()
-            
-            if get_uri["header"]["resultCode"] != "S0000":
-                raise OpPayPayLoginError(get_uri)
-        else:
-            get_uri = verify_json
+        result = self._try_verify(headers, payload)
+        if result:
+            return self._finish_with_redirect(result)
 
+        log.info("VERIFY_OTP (パターン2: otp のみ) を送信中...")
+        payload = {
+            "params": {
+                "extension_id": "user-main-2fa-v1",
+                "data": {"type": "VERIFY_OTP", "payload": {"otp": otp}},
+            }
+        }
+        result = self._try_verify(headers, payload)
+        if result:
+            return self._finish_with_redirect(result)
+
+        log.info("VERIFY_OTP (パターン3: 結合コード) を送信中...")
+        payload = {
+            "params": {
+                "extension_id": "user-main-2fa-v1",
+                "data": {"type": "VERIFY_OTP", "payload": {"otp": f"{prefix}-{otp}"}},
+            }
+        }
+        result = self._try_verify(headers, payload)
+        if result:
+            return self._finish_with_redirect(result)
+
+        log.info("すべての VERIFY_OTP が失敗。COMPLETE_OTL を試行します...")
+        payload = {"params": {"extension_id": "user-main-2fa-v1", "data": {"type": "COMPLETE_OTL", "payload": None}}}
+        update_res = self._web_request("post", f"{PORTAL_URL}/portal/api/v2/oauth2/extension/code-grant/update", headers=headers, json=payload)
+        get_uri = update_res.json()
+        if get_uri["header"]["resultCode"] != "S0000":
+            raise OpPayPayLoginError(f"COMPLETE_OTL も失敗しました: {get_uri}")
+        return self._finish_with_redirect(get_uri)
+
+    def _try_verify(self, headers, payload):
         try:
-            redirect_uri = get_uri["payload"]["redirect_uri"]
-        except Exception:
-            raise OpPayPayLoginError('redirect_uriが見つかりませんでした\n' + str(get_uri))
+            res = self._web_request("post", f"{PORTAL_URL}/portal/api/v2/oauth2/extension/code-grant/update", headers=headers, json=payload)
+            data = res.json()
+            if data["header"]["resultCode"] == "S0000":
+                log.info(f"✅ VERIFY_OTP 成功")
+                return data
+            log.warning(f"VERIFY_OTP 失敗: {data}")
+            return None
+        except Exception as e:
+            log.warning(f"VERIFY_OTP 例外: {e}")
+            return None
 
+    def _finish_with_redirect(self, result_json):
+        redirect_uri = result_json.get("payload", {}).get("redirect_uri")
+        if not redirect_uri:
+            raise OpPayPayLoginError("redirect_uriが見つかりませんでした")
         auth_code = parse_qs(urlparse(redirect_uri).query).get("code", [None])[0]
         if not auth_code:
-             raise OpPayPayLoginError("redirect_uriに認可コードが見つかりませんでした")
-
+            raise OpPayPayLoginError("redirect_uriに認可コードが見つかりませんでした")
         self._finish_token_exchange(auth_code)
         self._login_headers = {}
         log.info("✅ ログインが完了しました！")
+
+    def _login_confirm_otl_url(self, otl_code: str):
+        headers = self._login_headers.copy()
+        headers["Referer"] = f"{PORTAL_URL}/portal/oauth2/l?id={otl_code}&client_id=pay2-mobile-app-client"
+
+        log.info(f"OTL URL検証: {otl_code}")
+        verify_res = self._web_request("post", f"{PORTAL_URL}/portal/api/v2/oauth2/extension/sign-in/2fa/otl/verify", headers=headers, json={"code": otl_code})
+        verify_json = verify_res.json()
+        if verify_json["header"]["resultCode"] != "S0000":
+            raise OpPayPayLoginError(verify_json)
+
+        payload = {"params": {"extension_id": "user-main-2fa-v1", "data": {"type": "COMPLETE_OTL", "payload": None}}}
+        update_res = self._web_request("post", f"{PORTAL_URL}/portal/api/v2/oauth2/extension/code-grant/update", headers=headers, json=payload)
+        get_uri = update_res.json()
+        if get_uri["header"]["resultCode"] != "S0000":
+            raise OpPayPayLoginError(get_uri)
+        return self._finish_with_redirect(get_uri)
 
     def login_otp(self, otp_code: str):
         if self.session.headers.get("Authorization"):
