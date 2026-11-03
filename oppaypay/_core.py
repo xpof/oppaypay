@@ -317,31 +317,63 @@ class PayPayCore:
 
         self._login_headers = headers.copy()
 
-    def login_confirm(self, url: str):
+    def login_confirm(self, code_or_url: str):
         if self.session.headers.get("Authorization"):
             return "already logged in"
         if not self._login_headers:
             raise OpPayPayLoginError("ログインフローが開始されていません。先に login_start を実行してください。")
 
-        if "https://" in url:
-            url = url.replace("https://www.paypay.ne.jp/portal/oauth2/l?id=", "").split("&")[0]
+        if "otp-after-otl" in code_or_url:
+            parsed = urlparse(code_or_url)
+            qs = parse_qs(parsed.query)
+            prefix = qs.get("prefix", [""])[0]
+            otp = qs.get("otp", [""])[0]
+            if not prefix or not otp:
+                raise OpPayPayLoginError("URLから prefix または otp を抽出できませんでした。")
+            otl_code = f"{prefix}-{otp}"
+            log.info(f"otp-after-otl URLから認証コードを抽出: {otl_code}")
         
-        headers = self._login_headers.copy()
-        headers["Referer"] = f"{PORTAL_URL}/portal/oauth2/l?id={url}&client_id=pay2-mobile-app-client"
+        elif "https://" in code_or_url:
+            if "id=" in code_or_url:
+                otl_code = code_or_url.split("id=")[-1].split("&")[0].strip()
+            else:
+                raise OpPayPayLoginError("無効なURLです。id= または otp-after-otl パラメータが含まれていません。")
+            log.info(f"OTL URLから検証コードを抽出: {otl_code}")
+        
+        else:
+            otl_code = code_or_url.strip().upper()
+            log.info(f"認証コードを直接送信: {otl_code}")
 
-        log.info(f"OTL検証コードを送信中: {url}")
-        verify_res = self._web_request("post", f"{PORTAL_URL}/portal/api/v2/oauth2/extension/sign-in/2fa/otl/verify", headers=headers, json={"code": url})
+        if not re.fullmatch(r"[A-Z]{2}-\d{4}", otl_code):
+            raise OpPayPayLoginError(
+                f"認証コードの形式が正しくありません: {otl_code}\n"
+                "「EW-9048」または「EW9048」の形式で入力してください。"
+            )
+
+        headers = self._login_headers.copy()
+        headers["Referer"] = f"{PORTAL_URL}/portal/oauth2/otp-after-otl?prefix={otl_code[:2]}&otp={otl_code[3:]}"
+        
+        log.info(f"VERIFY_OTP を送信中: {otl_code}")
+        payload = {
+            "params": {
+                "extension_id": "user-main-2fa-v1",
+                "data": {"type": "VERIFY_OTP", "payload": {"otp": otl_code}},
+            }
+        }
+        verify_res = self._web_request("post", f"{PORTAL_URL}/portal/api/v2/oauth2/extension/code-grant/update", headers=headers, json=payload)
         verify_json = verify_res.json()
         
         if verify_json["header"]["resultCode"] != "S0000":
-            raise OpPayPayLoginError(verify_json)
-
-        payload = {"params": {"extension_id": "user-main-2fa-v1", "data": {"type": "COMPLETE_OTL", "payload": None}}}
-        update_res = self._web_request("post", f"{PORTAL_URL}/portal/api/v2/oauth2/extension/code-grant/update", headers=headers, json=payload)
-        get_uri = update_res.json()
-        
-        if get_uri["header"]["resultCode"] != "S0000":
-            raise OpPayPayLoginError(get_uri)
+            log.warning(f"VERIFY_OTP 失敗: {verify_json}")
+            log.info("COMPLETE_OTL を試行します...")
+            payload = {"params": {"extension_id": "user-main-2fa-v1", "data": {"type": "COMPLETE_OTL", "payload": None}}}
+            update_res = self._web_request("post", f"{PORTAL_URL}/portal/api/v2/oauth2/extension/code-grant/update", headers=headers, json=payload)
+            get_uri = update_res.json()
+            
+            if get_uri["header"]["resultCode"] != "S0000":
+                raise OpPayPayLoginError(get_uri)
+        else:
+            get_uri = verify_json
 
         try:
             redirect_uri = get_uri["payload"]["redirect_uri"]
@@ -349,6 +381,9 @@ class PayPayCore:
             raise OpPayPayLoginError('redirect_uriが見つかりませんでした\n' + str(get_uri))
 
         auth_code = parse_qs(urlparse(redirect_uri).query).get("code", [None])[0]
+        if not auth_code:
+             raise OpPayPayLoginError("redirect_uriに認可コードが見つかりませんでした")
+
         self._finish_token_exchange(auth_code)
         self._login_headers = {}
         log.info("✅ ログインが完了しました！")
