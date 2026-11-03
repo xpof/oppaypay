@@ -297,7 +297,6 @@ class PayPayCore:
         signin = signin_res.json()
         if signin["header"]["resultCode"] != "S0000":
             raise OpPayPayLoginError(signin)
-        
         if self.registered_device:
             try:
                 uri = signin["payload"]["redirectUrl"].replace("paypay://oauth2/callback?", "").split("&")
@@ -308,7 +307,18 @@ class PayPayCore:
             update_res = self._web_request("post", f"{PORTAL_URL}/portal/api/v2/oauth2/extension/code-grant/update", headers=headers, json={})
             if update_res.json()["header"]["resultCode"] != "S0000":
                 raise OpPayPayLoginError(update_res.json())
-                
+            
+            headers["Referer"] = f"{PORTAL_URL}/portal/oauth2/verification-method?client_id=pay2-mobile-app-client&mode=navigation-2fa"
+            payload = {"params": {"extension_id": "user-main-2fa-v1", "data": {"type": "SELECT_FLOW", "payload": {"flow": "OTL", "sign_in_method": "MOBILE", "base_url": f"{PORTAL_URL}/portal/oauth2/l"}}}}
+            select_res = self._web_request("post", f"{PORTAL_URL}/portal/api/v2/oauth2/extension/code-grant/update", headers=headers, json=payload)
+            if select_res.json()["header"]["resultCode"] != "S0000":
+                raise OpPayPayLoginError(select_res.json())
+
+            headers["Referer"] = f"{PORTAL_URL}/portal/oauth2/otl-request?client_id=pay2-mobile-app-client&mode=navigation-2fa"
+            self._web_request("post", f"{PORTAL_URL}/portal/api/v2/oauth2/extension/code-grant/side-channel/next-action-polling", headers=headers, json={"waitUntil": "PT5S"})
+            
+            log.info("📱 OTLフローを開始しました。SMSに認証URLが送信されたはずです。")
+
         self._login_headers = headers.copy()
 
     def login_otp(self, otp_code: str):
