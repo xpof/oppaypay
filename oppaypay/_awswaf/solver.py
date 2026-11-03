@@ -31,7 +31,6 @@ class AwsWafSolver:
 
         self.session = requests.Session(
             impersonate=profile,
-            http2=True,           
             timeout=15,
         )
 
