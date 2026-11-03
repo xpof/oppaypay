@@ -357,51 +357,70 @@ class PayPayCore:
             return
         
         raise OpPayPayLoginError("OTP認証に失敗しました")
-
+# -------------------------------------------
     def login_confirm(self, code_or_url: str):
         if self.session.headers.get("Authorization"):
             return "already logged in"
         if not self._login_headers:
             raise OpPayPayLoginError("ログインフローが開始されていません。先に login_start を実行してください。")
 
-        if "https://" in code_or_url:
-            if "id=" in code_or_url:
-                otl_code = code_or_url.split("id=")[-1].split("&")[0]
-            else:
-                raise OpPayPayLoginError("無効なURLです。id= パラメータが含まれていません。")
-        else:
-            otl_code = code_or_url.strip()
-
         headers = self._login_headers.copy()
-        headers["Referer"] = f"{PORTAL_URL}/portal/oauth2/l?id={otl_code}&client_id=pay2-mobile-app-client"
-
-        log.info(f"OTL検証コードを送信中: {otl_code}")
         
-        verify_res = self._web_request("post", f"{PORTAL_URL}/portal/api/v2/oauth2/extension/sign-in/2fa/otl/verify", headers=headers, json={"code": otl_code})
-        verify_json = verify_res.json()
-        
-        if verify_json["header"]["resultCode"] != "S0000":
-            raise OpPayPayLoginError(verify_json)
+        if "https://" in code_or_url:
+            log.info("ブラウザでの承認操作を検知するため、ポーリングを開始します...")
+            headers["Referer"] = f"{PORTAL_URL}/portal/oauth2/otl-request?client_id=pay2-mobile-app-client&mode=navigation-2fa"
+            
+            max_polling_attempts = 60
+            for i in range(max_polling_attempts):
+                polling_res = self._web_request("post", f"{PORTAL_URL}/portal/api/v2/oauth2/extension/code-grant/side-channel/next-action-polling", headers=headers, json={"waitUntil": "PT5S"})
+                polling_json = polling_res.json()
+                
+                if polling_json["header"]["resultCode"] != "S0000":
+                    raise OpPayPayLoginError(polling_json)
+                    
+                payload_data = polling_json.get("payload", {})
+                request_data = payload_data.get("request", {})
+                data_payload = request_data.get("data", {})
+                
+                if data_payload.get("type") == "COMPLETE_OTL":
+                    redirect_uri = data_payload.get("payload", {}).get("redirect_uri")
+                    if not redirect_uri:
+                        raise OpPayPayLoginError("redirect_uriが見つかりませんでした")
+                    auth_code = parse_qs(urlparse(redirect_uri).query).get("code", [None])[0]
+                    self._finish_token_exchange(auth_code)
+                    self._login_headers = {}
+                    log.info("✅ ブラウザでの承認が検知されました。ログイン完了！")
+                    return
+                
+                log.info(f"承認待機中... ({i+1}/{max_polling_attempts})")
+                time.sleep(2)
+                
+            raise OpPayPayLoginError("承認のタイムアウト。ブラウザで承認操作を行ってください。")
+        else:
+            # コード（OR-2742など）が入力された場合
+            otl_code = code_or_url.strip().upper()
+            log.info(f"認証コードを送信中: {otl_code}")
+            
+            headers["Referer"] = f"{PORTAL_URL}/portal/oauth2/l?id={otl_code}&client_id=pay2-mobile-app-client"
+            verify_res = self._web_request("post", f"{PORTAL_URL}/portal/api/v2/oauth2/extension/sign-in/2fa/otl/verify", headers=headers, json={"code": otl_code})
+            verify_json = verify_res.json()
+            
+            if verify_json["header"]["resultCode"] != "S0000":
+                raise OpPayPayLoginError(verify_json)
 
-        payload = {"params": {"extension_id": "user-main-2fa-v1", "data": {"type": "COMPLETE_OTL", "payload": None}}}
-        update_res = self._web_request("post", f"{PORTAL_URL}/portal/api/v2/oauth2/extension/code-grant/update", headers=headers, json=payload)
-        get_uri = update_res.json()
-        
-        if get_uri["header"]["resultCode"] != "S0000":
-            raise OpPayPayLoginError(get_uri)
+            payload = {"params": {"extension_id": "user-main-2fa-v1", "data": {"type": "COMPLETE_OTL", "payload": None}}}
+            update_res = self._web_request("post", f"{PORTAL_URL}/portal/api/v2/oauth2/extension/code-grant/update", headers=headers, json=payload)
+            get_uri = update_res.json()
+            
+            if get_uri["header"]["resultCode"] != "S0000":
+                raise OpPayPayLoginError(get_uri)
 
-        redirect_uri = get_uri["payload"].get("redirect_uri")
-        if not redirect_uri:
-            raise OpPayPayLoginError("redirect_uriが見つかりませんでした")
-
-        auth_code = parse_qs(urlparse(redirect_uri).query).get("code", [None])[0]
-        if not auth_code:
-             raise OpPayPayLoginError("redirect_uriに認可コードが見つかりませんでした")
-
-        self._finish_token_exchange(auth_code)
-        self._login_headers = {}
-        log.info("✅ ログインが完了しました！")
-
+            redirect_uri = get_uri["payload"].get("redirect_uri")
+            auth_code = parse_qs(urlparse(redirect_uri).query).get("code", [None])[0]
+            self._finish_token_exchange(auth_code)
+            self._login_headers = {}
+            log.info("✅ ログイン完了！")
+# -----------------------------------------------
     def login_otl(self):
         if self.session.headers.get("Authorization"):
             return "already logged in"
