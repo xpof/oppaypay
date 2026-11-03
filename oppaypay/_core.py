@@ -60,6 +60,7 @@ class PayPayCore:
         self._alive_stop_event = threading.Event()
 
         web_ua = "Mozilla/5.0 (iPhone; CPU iPhone OS 26_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/23G71"
+        
         self.session = curl_requests.Session(
             impersonate=select_profile(web_ua),
             proxies={"http": proxy, "https": proxy} if proxy else None,
