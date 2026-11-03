@@ -5,6 +5,7 @@ import secrets
 import hashlib
 import re
 import threading
+import json
 from typing import NamedTuple, List, Dict, Any, Optional
 from urllib.parse import parse_qs, urlparse
 from uuid import uuid4
@@ -25,6 +26,7 @@ log = logging.getLogger("oppaypay.core")
 VERSION = "5.57.0"
 BASE_URL = "https://app4.paypay.ne.jp"
 PORTAL_URL = "https://www.paypay.ne.jp"
+EVENT_URL = "https://events.paypay.ne.jp"
 
 class Balance(NamedTuple):
     money: int | None
@@ -205,6 +207,39 @@ class PayPayCore:
                 response = self.session.post(url, headers=headers, allow_redirects=allow_redirects, **kwargs)
         return response
 
+    def _send_app_event(self, event_name: str = "otp_verification"):
+        url = f"{EVENT_URL}/events/v1/app-event"
+        headers = {
+            "accept": "*/*",
+            "accept-encoding": "gzip, deflate, br, zstd",
+            "accept-language": "ja,en;q=0.9,en-GB;q=0.8,en-US;q=0.7,ja-JP;q=0.6",
+            "content-type": "text/plain",
+            "origin": PORTAL_URL,
+            "referer": f"{PORTAL_URL}/",
+            "sec-fetch-site": "same-site",
+            "user-agent": self.session.headers.get("User-Agent", ""),
+        }
+        
+        payload = {
+            "events": [
+                {
+                    "event_id": str(uuid4()),
+                    "event_name": event_name,
+                    "event_time": int(time.time() * 1000),
+                    "properties": {
+                        "page": "otp-after-otl",
+                        "mode": "navigation-2fa"
+                    }
+                }
+            ]
+        }
+        
+        try:
+            res = self.session.post(url, headers=headers, data=json.dumps(payload), timeout=5)
+            log.debug(f"app-event sent: {res.status_code}")
+        except Exception as e:
+            log.warning(f"Failed to send app-event: {e}")
+
     def start_alive_simulator(self, duration_minutes: int = 60, loop: bool = True):
         if self._alive_thread and self._alive_thread.is_alive():
             log.warning("AliveSimulator はすでに起動しています。")
@@ -330,6 +365,7 @@ class PayPayCore:
             otp = qs.get("otp", [""])[0]
             if not prefix or not otp:
                 raise OpPayPayLoginError("URLから prefix または otp を抽出できませんでした。")
+            otl_code = f"{prefix}-{otp}"
             log.info(f"otp-after-otl URLから抽出: prefix={prefix}, otp={otp}")
         
         elif "https://" in code_or_url:
@@ -343,39 +379,32 @@ class PayPayCore:
             code_clean = code_or_url.strip().upper().replace("-", "")
             if len(code_clean) == 6:
                 prefix, otp = code_clean[:2], code_clean[2:]
+                otl_code = f"{prefix}-{otp}"
             else:
-                raise OpPayPayLoginError("コード形式が不正です。SG-7429 または SG7429 の形式で入力してください。")
+                raise OpPayPayLoginError("コード形式が不正です。QB-5884 または QB5884 の形式で入力してください。")
+
+        log.info("app-event (テレメトリ) を送信します...")
+        self._send_app_event("otp_verification_started")
 
         headers = self._login_headers.copy()
-        headers["Referer"] = f"{PORTAL_URL}/portal/oauth2/otp-after-otl?prefix={prefix}&otp={otp}"
+        headers["Referer"] = f"{PORTAL_URL}/portal/oauth2/otp-after-otl?prefix={otl_code[:2]}&otp={otl_code[3:]}"
 
-        log.info("VERIFY_OTP (パターン1: prefix & otp 分離) を送信中...")
+        log.info(f"VERIFY_OTP (otp='{otl_code}') を送信中...")
         payload = {
             "params": {
                 "extension_id": "user-main-2fa-v1",
-                "data": {"type": "VERIFY_OTP", "payload": {"prefix": prefix, "otp": otp}},
+                "data": {"type": "VERIFY_OTP", "payload": {"otp": otl_code}},
             }
         }
         result = self._try_verify(headers, payload)
         if result:
             return self._finish_with_redirect(result)
 
-        log.info("VERIFY_OTP (パターン2: otp のみ) を送信中...")
+        log.info(f"VERIFY_OTP (otp='{otl_code.replace('-', '')}') を送信中...")
         payload = {
             "params": {
                 "extension_id": "user-main-2fa-v1",
-                "data": {"type": "VERIFY_OTP", "payload": {"otp": otp}},
-            }
-        }
-        result = self._try_verify(headers, payload)
-        if result:
-            return self._finish_with_redirect(result)
-
-        log.info("VERIFY_OTP (パターン3: 結合コード) を送信中...")
-        payload = {
-            "params": {
-                "extension_id": "user-main-2fa-v1",
-                "data": {"type": "VERIFY_OTP", "payload": {"otp": f"{prefix}-{otp}"}},
+                "data": {"type": "VERIFY_OTP", "payload": {"otp": otl_code.replace("-", "")}},
             }
         }
         result = self._try_verify(headers, payload)
@@ -430,94 +459,6 @@ class PayPayCore:
         if get_uri["header"]["resultCode"] != "S0000":
             raise OpPayPayLoginError(get_uri)
         return self._finish_with_redirect(get_uri)
-
-    def login_otp(self, otp_code: str):
-        if self.session.headers.get("Authorization"):
-            return "already logged in"
-        if not self._login_headers:
-            raise OpPayPayLoginError("ログインフローが開始されていません。先に login_start を実行してください。")
-        
-        headers = self._login_headers.copy()
-        headers["Referer"] = f"{PORTAL_URL}/portal/oauth2/verification-method?client_id=pay2-mobile-app-client&mode=navigation-2fa"
-        payload = {"params": {"extension_id": "user-main-2fa-v1", "data": {"type": "SELECT_FLOW", "payload": {"flow": "OTP", "sign_in_method": "MOBILE"}}}}
-        select_res = self._web_request("post", f"{PORTAL_URL}/portal/api/v2/oauth2/extension/code-grant/update", headers=headers, json=payload)
-        if select_res.json()["header"]["resultCode"] != "S0000":
-            raise OpPayPayLoginError(select_res.json())
-        
-        otp_code = otp_code.strip().upper()
-        log.info(f"OTPコードを送信中: {otp_code}")
-        payload = {"params": {"extension_id": "user-main-2fa-v1", "data": {"type": "VERIFY_OTP", "payload": {"code": otp_code}}}}
-        verify_res = self._web_request("post", f"{PORTAL_URL}/portal/api/v2/oauth2/extension/code-grant/update", headers=headers, json=payload)
-        
-        try:
-            res_json = verify_res.json()
-        except Exception as e:
-            raise OpPayPayLoginError(f"OTP検証APIがJSONを返しませんでした。Status: {verify_res.status_code}, Body: {verify_res.text[:300]}")
-        
-        if res_json.get("header", {}).get("resultCode") != "S0000":
-            raise OpPayPayLoginError(res_json)
-        
-        redirect_uri = res_json.get("payload", {}).get("redirect_uri")
-        if not redirect_uri:
-            raise OpPayPayLoginError("redirect_uriが見つかりませんでした")
-        
-        if "paypay://oauth2/callback?code=" in redirect_uri:
-            code = redirect_uri.split("code=")[1].split("&")[0]
-            self._finish_token_exchange(code)
-            print("✅ OTP認証が完了しました！")
-            self._login_headers = headers.copy()
-            return
-        
-        raise OpPayPayLoginError("OTP認証に失敗しました")
-
-    def login_otl(self):
-        if self.session.headers.get("Authorization"):
-            return "already logged in"
-        if not self._login_headers:
-            raise OpPayPayLoginError("ログインフローが開始されていません。先に login_start を実行してください。")
-        
-        headers = self._login_headers.copy()
-        headers["Referer"] = f"{PORTAL_URL}/portal/oauth2/verification-method?client_id=pay2-mobile-app-client&mode=navigation-2fa"
-        payload = {"params": {"extension_id": "user-main-2fa-v1", "data": {"type": "SELECT_FLOW", "payload": {"flow": "OTL", "sign_in_method": "MOBILE", "base_url": f"{PORTAL_URL}/portal/oauth2/l"}}}}
-        select_res = self._web_request("post", f"{PORTAL_URL}/portal/api/v2/oauth2/extension/code-grant/update", headers=headers, json=payload)
-        if select_res.json()["header"]["resultCode"] != "S0000":
-            raise OpPayPayLoginError(select_res.json())
-        
-        headers["Referer"] = f"{PORTAL_URL}/portal/oauth2/otl-request?client_id=pay2-mobile-app-client&mode=navigation-2fa"
-        
-        print("📱 SMSに認証URLが送信されました。")
-        print("👉 以下の手順で承認を完了させてください：")
-        print("   1. スマホでSMSのURLを開いてください。")
-        print("   2. 表示されるQRコードをPayPayアプリでスキャンするか、「別端末が手元にない」をタップしてください。")
-        print("   3. 承認が完了すると、このプログラムが自動的に検知してログインを完了します。")
-
-        max_polling_attempts = 60
-        for poll_attempt in range(max_polling_attempts):
-            polling_res = self._web_request("post", f"{PORTAL_URL}/portal/api/v2/oauth2/extension/code-grant/side-channel/next-action-polling", headers=headers, json={"waitUntil": "PT5S"})
-            polling_data = polling_res.json()
-            
-            if polling_data["header"]["resultCode"] != "S0000":
-                raise OpPayPayLoginError(polling_data)
-                
-            request_payload = polling_data.get("payload", {}).get("request", {})
-            data_payload = request_payload.get("data", {})
-            
-            if data_payload.get("type") == "COMPLETE_OTL":
-                redirect_uri = data_payload.get("payload", {}).get("redirect_uri")
-                if not redirect_uri:
-                    raise OpPayPayLoginError("redirect_uriが見つかりませんでした")
-                
-                if "paypay://oauth2/callback?code=" in redirect_uri:
-                    code = redirect_uri.split("code=")[1].split("&")[0]
-                    self._finish_token_exchange(code)
-                    print("\n✅ ブラウザ/アプリでの承認が検知されました。ログインが完了しました！")
-                    self._login_headers = headers.copy()
-                    return
-            
-            print(f" 承認待機中... ({poll_attempt + 1}/{max_polling_attempts})")
-            time.sleep(5)
-            
-        raise OpPayPayLoginError("承認のタイムアウト。URLを開いて承認操作を行ってください。")
 
     def _finish_token_exchange(self, code: str):
         headers = self.session.headers.copy()
