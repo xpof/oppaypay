@@ -338,15 +338,51 @@ class PayPayCore:
         else:
             raise OpPayPayLoginError(f"予期しないレスポンス: type={payload_type}")
 
-    def login_confirm(self, otp_code: str):
+    def login_confirm(self, code_or_url: str):
         if self.session.headers.get("Authorization"):
             return "already logged in"
         if not self._login_headers:
             raise OpPayPayLoginError("ログインフローが開始されていません。先に login_start を実行してください。")
 
-        otp_digits = re.sub(r'\D', '', otp_code)
+        if "https://" in code_or_url or re.fullmatch(r"[A-Z]{2}-\d{4}", code_or_url.strip().upper()):
+            if "https://" in code_or_url:
+                if "id=" in code_or_url:
+                    otl_code = code_or_url.split("id=")[-1].split("&")[0].strip()
+                else:
+                    raise OpPayPayLoginError("無効なURLです。")
+            else:
+                otl_code = code_or_url.strip().upper()
+
+            log.info(f"OTL検証コードを送信中: {otl_code}")
+            headers = self._login_headers.copy()
+            headers["Referer"] = f"{PORTAL_URL}/portal/oauth2/l?id={otl_code}&client_id=pay2-mobile-app-client"
+
+            verify_res = self._web_request("post", f"{PORTAL_URL}/portal/api/v2/oauth2/extension/sign-in/2fa/otl/verify", headers=headers, json={"code": otl_code})
+            verify_json = verify_res.json()
+            
+            if verify_json["header"]["resultCode"] != "S0000":
+                raise OpPayPayLoginError(verify_json)
+
+            payload = {"params": {"extension_id": "user-main-2fa-v1", "data": {"type": "COMPLETE_OTL", "payload": None}}}
+            update_res = self._web_request("post", f"{PORTAL_URL}/portal/api/v2/oauth2/extension/code-grant/update", headers=headers, json=payload)
+            get_uri = update_res.json()
+            
+            if get_uri["header"]["resultCode"] != "S0000":
+                raise OpPayPayLoginError(get_uri)
+
+            redirect_uri = get_uri["payload"].get("redirect_uri")
+            if not redirect_uri:
+                raise OpPayPayLoginError("redirect_uriが見つかりませんでした")
+
+            auth_code = parse_qs(urlparse(redirect_uri).query).get("code", [None])[0]
+            self._finish_token_exchange(auth_code)
+            self._login_headers = {}
+            log.info("✅ OTL承認によるログインが完了しました！")
+            return
+
+        otp_digits = re.sub(r'\D', '', code_or_url)
         if len(otp_digits) != 4:
-            raise OpPayPayLoginError(f"OTPコードは4桁の数字である必要があります（入力: {otp_code}）")
+            raise OpPayPayLoginError(f"OTPコードは4桁の数字、またはOTLコード(OR-2742形式)を入力してください（入力: {code_or_url}）")
 
         headers = self._login_headers.copy()
         headers["Referer"] = f"{PORTAL_URL}/portal/oauth2/otp?flow=SIGNIN&otpPrefix={self._otp_prefix}&usernameType=MOBILE&client_id=pay2-mobile-app-client"
