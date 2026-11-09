@@ -309,7 +309,37 @@ class PayPayCore:
             return
         
         if payload_type == "extension-code-grant":
-            log.info("📱 OTL（拡張認証コード付与）フローが要求されました。")
+            log.info("📱 OTL（拡張認証コード付与）フローが要求されましたが、OTPフローへの切り替えを試みます...")
+            
+            headers["Referer"] = f"{PORTAL_URL}/portal/oauth2/verification-method?client_id=pay2-mobile-app-client&mode=navigation-2fa"
+            otp_payload = {
+                "params": {
+                    "extension_id": "user-main-2fa-v1",
+                    "data": {
+                        "type": "SELECT_FLOW",
+                        "payload": {
+                            "flow": "OTP",
+                            "sign_in_method": "MOBILE"
+                        }
+                    }
+                }
+            }
+            otp_res = self._web_request("post", f"{PORTAL_URL}/portal/api/v2/oauth2/extension/code-grant/update", headers=headers, json=otp_payload)
+            otp_json = otp_res.json()
+            log.info(f"SELECT_FLOW(OTP) レスポンス: {json.dumps(otp_json, ensure_ascii=False)}")
+            
+            if otp_json["header"]["resultCode"] == "S0000":
+                data_payload = otp_json.get("payload", {}).get("request", {}).get("data", {})
+                if data_payload.get("type") == "VERIFY_OTP":
+                    self._otp_prefix = data_payload.get("payload", {}).get("otp_prefix")
+                    log.info(f"✅ OTPフローに切り替わりました。プレフィックス: {self._otp_prefix}")
+                    log.info("SMSに届いた4桁のコードを login_confirm() に入力してください。")
+                    self._login_headers = headers.copy()
+                    return
+                elif data_payload.get("type") == "VERIFY_QR":
+                    log.info("⚠️ OTPへの切り替えは拒否されました（QR要求）。OTLフローを続行します。")
+            
+            log.info("OTLフローを開始します。")
             update_res = self._web_request("post", f"{PORTAL_URL}/portal/api/v2/oauth2/extension/code-grant/update", headers=headers, json={})
             if update_res.json()["header"]["resultCode"] != "S0000":
                 raise OpPayPayLoginError(update_res.json())
