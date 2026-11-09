@@ -299,10 +299,32 @@ class PayPayCore:
         
         log.info(f"sign-in/password レスポンス全文: {json.dumps(signin, ensure_ascii=False)}")
         
-        if signin.get("payload", {}).get("type") == "otp":
+        payload_type = signin.get("payload", {}).get("type")
+        
+        if payload_type == "otp":
             self._otp_prefix = signin["payload"].get("otpPrefix")
             log.info(f"📱 OTPが要求されました。プレフィックス: {self._otp_prefix}")
             log.info("SMSに届いた4桁のコードを login_confirm() に入力してください。")
+            self._login_headers = headers.copy()
+            return
+        
+        if payload_type == "extension-code-grant":
+            log.info("📱 OTL（拡張認証コード付与）フローが要求されました。")
+            update_res = self._web_request("post", f"{PORTAL_URL}/portal/api/v2/oauth2/extension/code-grant/update", headers=headers, json={})
+            if update_res.json()["header"]["resultCode"] != "S0000":
+                raise OpPayPayLoginError(update_res.json())
+            
+            headers["Referer"] = f"{PORTAL_URL}/portal/oauth2/verification-method?client_id=pay2-mobile-app-client&mode=navigation-2fa"
+            payload = {"params": {"extension_id": "user-main-2fa-v1", "data": {"type": "SELECT_FLOW", "payload": {"flow": "OTL", "sign_in_method": "MOBILE", "base_url": f"{PORTAL_URL}/portal/oauth2/l"}}}}
+            select_res = self._web_request("post", f"{PORTAL_URL}/portal/api/v2/oauth2/extension/code-grant/update", headers=headers, json=payload)
+            if select_res.json()["header"]["resultCode"] != "S0000":
+                raise OpPayPayLoginError(select_res.json())
+            
+            headers["Referer"] = f"{PORTAL_URL}/portal/oauth2/otl-request?client_id=pay2-mobile-app-client&mode=navigation-2fa"
+            self._web_request("post", f"{PORTAL_URL}/portal/api/v2/oauth2/extension/code-grant/side-channel/next-action-polling", headers=headers, json={"waitUntil": "PT5S"})
+            
+            log.info("📱 OTLフローを開始しました。SMSに認証URLが送信されたはずです。")
+            log.info("SMSのURLをブラウザで開き、「別端末が手元にない」を押して出たコードを login_confirm() に入力するか、Seleniumで承認してください。")
             self._login_headers = headers.copy()
             return
         
@@ -314,9 +336,7 @@ class PayPayCore:
             except Exception:
                 raise OpPayPayLoginError("登録されていないDevice-UUID、またはリダイレクトURLの解析に失敗")
         else:
-            payload_data = signin.get("payload", {})
-            log.error(f"予期しないレスポンス。payload のキー: {list(payload_data.keys())}")
-            raise OpPayPayLoginError(f"予期しないレスポンス: OTPもリダイレクトURLもありません。payload={payload_data}")
+            raise OpPayPayLoginError(f"予期しないレスポンス: type={payload_type}")
 
     def login_confirm(self, otp_code: str):
         if self.session.headers.get("Authorization"):
