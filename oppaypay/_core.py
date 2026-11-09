@@ -297,6 +297,8 @@ class PayPayCore:
         if signin["header"]["resultCode"] != "S0000":
             raise OpPayPayLoginError(signin)
         
+        log.info(f"sign-in/password レスポンス全文: {json.dumps(signin, ensure_ascii=False)}")
+        
         if signin.get("payload", {}).get("type") == "otp":
             self._otp_prefix = signin["payload"].get("otpPrefix")
             log.info(f"📱 OTPが要求されました。プレフィックス: {self._otp_prefix}")
@@ -312,7 +314,9 @@ class PayPayCore:
             except Exception:
                 raise OpPayPayLoginError("登録されていないDevice-UUID、またはリダイレクトURLの解析に失敗")
         else:
-            raise OpPayPayLoginError("予期しないレスポンス: OTPもリダイレクトURLもありません")
+            payload_data = signin.get("payload", {})
+            log.error(f"予期しないレスポンス。payload のキー: {list(payload_data.keys())}")
+            raise OpPayPayLoginError(f"予期しないレスポンス: OTPもリダイレクトURLもありません。payload={payload_data}")
 
     def login_confirm(self, otp_code: str):
         if self.session.headers.get("Authorization"):
