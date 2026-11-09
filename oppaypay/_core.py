@@ -23,10 +23,9 @@ from .exceptions import (
 
 log = logging.getLogger("oppaypay.core")
 
-VERSION = "5.72.0"
+VERSION = "5.57.0"
 BASE_URL = "https://app4.paypay.ne.jp"
 PORTAL_URL = "https://www.paypay.ne.jp"
-EVENT_URL = "https://events.paypay.ne.jp"
 
 class Balance(NamedTuple):
     money: int | None
@@ -63,7 +62,7 @@ class PayPayCore:
         self._alive_thread: threading.Thread | None = None
         self._alive_stop_event = threading.Event()
 
-        web_ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        web_ua = "Mozilla/5.0 (iPhone; CPU iPhone OS 26_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/23G71"
         self.session = curl_requests.Session(
             impersonate=select_profile(web_ua),
             proxies={"http": proxy, "https": proxy} if proxy else None,
@@ -248,9 +247,8 @@ class PayPayCore:
             raise OpPayPayLoginError("電話番号を入力してください")
         self.access_token = None
         self.code_verifier, self.code_challenge = pkce.generate_pkce_pair(43)
-        
         payload = {
-            "clientId": "pay2-consumer-web-client", "clientAppVersion": VERSION, "clientOsVersion": "26.6",
+            "clientId": "pay2-mobile-app-client", "clientAppVersion": VERSION, "clientOsVersion": "26.6",
             "clientOsType": "IOS", "redirectUri": "paypay://oauth2/callback", "responseType": "code",
             "state": pkce.generate_code_verifier(43), "codeChallenge": self.code_challenge,
             "codeChallengeMethod": "S256", "scope": "REGULAR", "tokenVersion": "v2", "prompt": "", "uiLocales": "ja"
@@ -268,18 +266,18 @@ class PayPayCore:
             "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 26_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/23G71",
             "X-Requested-With": "jp.ne.paypay.app"
         }
-        params = {"client_id": "pay2-consumer-web-client", "request_uri": response["payload"]["requestUri"]}
+        params = {"client_id": "pay2-mobile-app-client", "request_uri": response["payload"]["requestUri"]}
         self._web_request("get", f"{PORTAL_URL}/portal/api/v2/oauth2/authorize", headers=headers, params=params, allow_redirects=False)
         
-        params = {"client_id": "pay2-consumer-web-client", "mode": "landing"}
+        params = {"client_id": "pay2-mobile-app-client", "mode": "landing"}
         signin_page_response = self._web_request("get", f"{PORTAL_URL}/portal/oauth2/sign-in", headers=headers, params=params)
         if signin_page_response.status_code > 400:
             raise OpPayPayLoginError("サインインページの取得に失敗しました")
         
         headers = {
             "Accept": "application/json, text/plain, */*", "Accept-Encoding": "gzip, deflate, br, zstd", "Accept-Language": "ja-JP,ja;q=0.9",
-            "Cache-Control": "no-cache", "Client-Id": "pay2-consumer-web-client", "Client-Type": "PAYPAYWEB", "Connection": "keep-alive",
-            "Host": "www.paypay.ne.jp", "Pragma": "no-cache", "Referer": f"{PORTAL_URL}/portal/oauth2/sign-in?client_id=pay2-consumer-web-client&mode=landing",
+            "Cache-Control": "no-cache", "Client-Id": "pay2-mobile-app-client", "Client-Type": "PAYPAYAPP", "Connection": "keep-alive",
+            "Host": "www.paypay.ne.jp", "Pragma": "no-cache", "Referer": f"{PORTAL_URL}/portal/oauth2/sign-in?client_id=pay2-mobile-app-client&mode=landing",
             "sec-ch-ua": '"Not/A)Brand";v="99", "Safari";v="26", "WebKit";v="605"', "sec-ch-ua-mobile": "?1", "sec-ch-ua-platform": '"iOS"',
             "Sec-Fetch-Dest": "empty", "Sec-Fetch-Mode": "cors", "Sec-Fetch-Site": "same-origin",
             "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 26_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/23G71",
@@ -327,9 +325,9 @@ class PayPayCore:
             raise OpPayPayLoginError(f"OTPコードは4桁の数字である必要があります（入力: {otp_code}）")
 
         headers = self._login_headers.copy()
-        headers["Referer"] = f"{PORTAL_URL}/portal/oauth2/otp?flow=SIGNIN&otpPrefix={self._otp_prefix}&usernameType=MOBILE&client_id=pay2-consumer-web-client"
-        headers["client-id"] = "pay2-consumer-web-client"
-        headers["client-type"] = "PAYPAYWEB"
+        headers["Referer"] = f"{PORTAL_URL}/portal/oauth2/otp?flow=SIGNIN&otpPrefix={self._otp_prefix}&usernameType=MOBILE&client_id=pay2-mobile-app-client"
+        headers["client-id"] = "pay2-mobile-app-client"
+        headers["client-type"] = "PAYPAYAPP"
         headers["Content-Type"] = "application/json"
         headers["Origin"] = PORTAL_URL
 
@@ -400,7 +398,7 @@ class PayPayCore:
         if "Device-Lock-Type" in headers: del headers["Device-Lock-Type"]
         if "Device-Lock-App-Setting" in headers: del headers["Device-Lock-App-Setting"]
         refresh_data = {
-            "clientId": "pay2-consumer-web-client",
+            "clientId": "pay2-mobile-app-client",
             "grant_type": "refresh_token",
             "refresh_token": self.refresh_token
         }
