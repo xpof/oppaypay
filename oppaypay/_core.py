@@ -14,7 +14,7 @@ import pkce
 from ._fingerprint import select_profile
 from ._sensors import generate_device_state, update_header_device_state
 from ._awswaf import solve_aws_waf_challenge
-from ._alive_request import AliveSimulator
+from ._alive import AliveSimulator
 from .exceptions import (
     OpPayPayError, OpPayPayLoginError, OpPayPayNetworkError,
     OpPayPayBotDetectedError, OpPayPayEKYCRequiredError,
@@ -100,12 +100,15 @@ class PayPayCore:
             "Device-Rotation": device_state.device_rotation,
             "Device-Rotation-2": device_state.device_rotation_2,
             "Device-UUID": self.device_uuid,
+            "FontSize": "1.0",
             "Host": "app4.paypay.ne.jp",
             "Is-Emulator": "false",
             "Network-Status": "WIFI",
             "System-Locale": "ja",
             "Timezone": "Asia/Tokyo",
-            "User-Agent": f"PaypayApp/{VERSION} iPhone17e"
+            "User-Agent": f"PaypayApp/{VERSION} iPhone17e",
+            "Client-Latitude": "35.665558", # <-新しく追加、paypayclientをJADXで解析してたらheader内にクライアントの緯度と経度を図る値があったため野獣亭の座標に合わせた
+            "Client-Longitude": "139.669597",
         }
         
         if self.access_token:
@@ -445,35 +448,30 @@ class PayPayCore:
 
     def _finish_token_exchange(self, code: str):
         log.debug("Exchanging authorization code for tokens...")
-        url = f"{PORTAL_URL}/portal/api/v2/oauth2/token"
+        url = f"{BASE_URL}/bff/v2/oauth2/token"
         
-        headers = {
-            "Accept": "application/json, text/plain, */*",
-            "Accept-Encoding": "gzip, deflate, br, zstd",
-            "Accept-Language": "ja,en-US;q=0.9,en;q=0.8",
-            "Content-Type": "application/json",
-            "Origin": PORTAL_URL,
-            "Referer": f"{PORTAL_URL}/app/oauth2/callback?code={code}",
-            "User-Agent": self.session.headers.get("User-Agent", ""),
+        headers = self.session.headers.copy()
+        if "Device-Lock-Type" in headers: del headers["Device-Lock-Type"]
+        if "Device-Lock-App-Setting" in headers: del headers["Device-Lock-App-Setting"]
+        
+        confirm_data = {
+            "clientId": "pay2-mobile-app-client",
+            "redirectUri": "paypay://oauth2/callback",
+            "code": code,
+            "codeVerifier": self.code_verifier
         }
         
-        payload = {"code": code}
-        res = self.session.post(url, headers=headers, json=payload, timeout=15)
+        get_token = self._api_request("post", url, headers=headers, data=confirm_data, params={"payPayLang": "ja"})
         
-        try:
-            response_json = res.json()
-        except Exception:
-            raise OpPayPayNetworkError(f"Token exchange returned non-JSON: {res.text[:300]}")
+        if get_token.get("header", {}).get("resultCode") != "S0000":
+            raise OpPayPayLoginError(get_token)
         
-        if response_json.get("header", {}).get("resultCode") != "S0000":
-            raise OpPayPayLoginError(response_json)
-        
-        data = response_json.get("payload", {}).get("data", {})
-        self.access_token = data.get("access_token")
-        self.refresh_token = data.get("refresh_token")
+        payload = get_token.get("payload", {})
+        self.access_token = payload.get("accessToken")
+        self.refresh_token = payload.get("refreshToken")
         
         if not self.access_token:
-            raise OpPayPayLoginError("access_token が見つかりませんでした")
+            raise OpPayPayLoginError(f"access_token が見つかりませんでした: {payload}")
             
         self.session.headers["Authorization"] = f"Bearer {self.access_token}"
         self.session.headers["content-type"] = "application/json"
@@ -487,19 +485,37 @@ class PayPayCore:
         headers = self.session.headers.copy()
         if "Device-Lock-Type" in headers: del headers["Device-Lock-Type"]
         if "Device-Lock-App-Setting" in headers: del headers["Device-Lock-App-Setting"]
+        
+        refresh_url = f"{BASE_URL}/v2/oauth2/refresh"
         refresh_data = {
             "clientId": "pay2-mobile-app-client",
-            "grant_type": "refresh_token",
             "refresh_token": self.refresh_token
         }
-        get_token = self._api_request("post", f"{BASE_URL}/bff/v2/oauth2/token", headers=headers, data=refresh_data, params={"payPayLang": "ja"})
-        if get_token["header"]["resultCode"] != "S0000":
+        
+        get_token = self._api_request(
+            "post", 
+            refresh_url, 
+            headers=headers, 
+            data=refresh_data, 
+            params={"payPayLang": "ja"},
+            timeout=60 # の REFRESH_TOKEN_TIMEOUT = 60000 に準拠
+        )
+        
+        if get_token.get("header", {}).get("resultCode") != "S0000":
             raise OpPayPayLoginError(f"トークン更新に失敗しました: {get_token}")
-        self.access_token = get_token["payload"]["accessToken"]
-        self.refresh_token = get_token["payload"].get("refreshToken", self.refresh_token)
+            
+        payload = get_token.get("payload", {})
+        self.access_token = payload.get("accessToken")
+        self.refresh_token = payload.get("refreshToken", self.refresh_token)
+        
+        if not self.access_token:
+            raise OpPayPayLoginError("更新後の access_token が見つかりませんでした")
+            
         self.session.headers["Authorization"] = f"Bearer {self.access_token}"
         self.session.headers["content-type"] = "application/json"
         self.session.headers = update_header_device_state(self.session.headers)
+        
+        log.info("✅ セッショントークンの更新に成功しました。")
         return True
 
     def alive(self) -> bool:
@@ -722,6 +738,9 @@ class PayPayCore:
         if data.get("result_info", {}).get("result_status") != "S":
             raise OpPayPayError(data)
         return data
+
+    def get_profile(self) -> dict:
+        return self.get_users_self()
 
     def get_kyc_status(self):
         if not self.access_token:
