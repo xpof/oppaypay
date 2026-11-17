@@ -107,7 +107,7 @@ class PayPayCore:
             "System-Locale": "ja",
             "Timezone": "Asia/Tokyo",
             "User-Agent": f"PaypayApp/{VERSION} iPhone17e",
-            "Client-Latitude": "35.665558", # <-新しく追加、paypayclientをJADXで解析してたらheader内にクライアントの緯度と経度を図る値があったため野獣亭の座標に合わせた
+            "Client-Latitude": "35.665558", # <-新しく追加
             "Client-Longitude": "139.669597",
         }
         
