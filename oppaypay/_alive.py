@@ -1,18 +1,12 @@
 import time
 import random
 import math
-import threading
-import logging
 from ._sensors import update_header_device_state
 
-log = logging.getLogger("oppaypay.alive")
-
 class HumanPatternSimulator:
-
-    def __init__(self, core, interval_range=(30, 180)):
+    def __init__(self, core):
         self.core = core
         self._flow_state = 1.0
-        self.interval_range = interval_range
 
     def _organic_wait(self, base_rhythm: float = 1.5):
         core_wait = random.lognormvariate(math.log(base_rhythm), 0.3)
@@ -57,47 +51,10 @@ class HumanPatternSimulator:
         except Exception as e:
             print(f"[Organic] 中断: {e}")
 
-    def start(self):
-        if hasattr(self, '_thread') and self._thread.is_alive():
-            log.warning("HumanPatternSimulator はすでに起動しています。")
-            return
-            
-        self._stop_event = threading.Event()
-        def _run():
-            while not self._stop_event.is_set():
-                try:
-                    self.run_full_session_simulation()
-                except Exception as e:
-                    log.error(f"HumanPatternSimulator error: {e}")
-                
-                wait_time = random.uniform(self.interval_range[0], self.interval_range[1])
-                log.info(f"[Organic] 次のセッションまで {wait_time:.1f} 秒待機...")
-                self._stop_event.wait(wait_time)
-                
-        self._thread = threading.Thread(target=_run, daemon=True)
-        self._thread.start()
-        log.info("🌱 HumanPatternSimulator をバックグラウンドで開始しました。")
-
-    def stop(self):
-        if hasattr(self, '_stop_event'):
-            self._stop_event.set()
-        if hasattr(self, '_thread'):
-            self._thread.join(timeout=10)
-        log.info("🌿 HumanPatternSimulator を停止しました。")
-
-
-class AliveSimulator:
-
-    def __init__(self, core):
-        self.core = core
-        self.human_simulator = HumanPatternSimulator(core)
-
-    def simulate_session(self, duration_minutes: int = 60):
-
-        self.human_simulator.run_full_session_simulation()
-
-
 def simulate_human_behavior(core):
-
     sim = HumanPatternSimulator(core)
     sim.run_full_session_simulation()
+
+class AliveSimulator(HumanPatternSimulator):
+    def simulate_session(self, duration_minutes: int = 60):
+        self.run_full_session_simulation()
