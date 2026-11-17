@@ -6,7 +6,7 @@ import hashlib
 import re
 import threading
 import json
-from typing import NamedTuple, List, Dict, Any, Optional
+from typing import NamedTuple
 from urllib.parse import parse_qs, urlparse
 from uuid import uuid4
 from curl_cffi import requests as curl_requests
@@ -107,7 +107,7 @@ class PayPayCore:
             "System-Locale": "ja",
             "Timezone": "Asia/Tokyo",
             "User-Agent": f"PaypayApp/{VERSION} iPhone17e",
-            "Client-Latitude": "35.665558", # <-新しく追加
+            "Client-Latitude": "35.665558",
             "Client-Longitude": "139.669597",
         }
         
@@ -342,7 +342,8 @@ class PayPayCore:
                 elif data_payload.get("type") == "VERIFY_QR":
                     log.info("⚠️ OTPへの切り替えは拒否されました（QR要求）。OTLフローを続行します。")
             
-            log.info("OTLフローを開始します。")
+            log.info("OTLフローを開始し、SMSのURLがタップされるのを待機します...")
+            
             update_res = self._web_request("post", f"{PORTAL_URL}/portal/api/v2/oauth2/extension/code-grant/update", headers=headers, json={})
             if update_res.json()["header"]["resultCode"] != "S0000":
                 raise OpPayPayLoginError(update_res.json())
@@ -354,12 +355,46 @@ class PayPayCore:
                 raise OpPayPayLoginError(select_res.json())
             
             headers["Referer"] = f"{PORTAL_URL}/portal/oauth2/otl-request?client_id=pay2-mobile-app-client&mode=navigation-2fa"
-            self._web_request("post", f"{PORTAL_URL}/portal/api/v2/oauth2/extension/code-grant/side-channel/next-action-polling", headers=headers, json={"waitUntil": "PT5S"})
             
-            log.info("📱 OTLフローを開始しました。SMSに認証URLが送信されたはずです。")
-            log.info("SMSのURLをブラウザで開き、「別端末が手元にない」を押して出たコードを login_confirm() に入力するか、Seleniumで承認してください。")
-            self._login_headers = headers.copy()
-            return
+            print("\n" + "="*70)
+            print("📱 SMSに認証URLが送信されました。")
+            print("👉 スマホでSMSのURLを開き、『ログインを許可』を押してください。")
+            print("   プログラムが自動的に承認を検知してログインを完了させます。")
+            print("="*70 + "\n")
+
+            max_polling_attempts = 60
+            for poll_attempt in range(max_polling_attempts):
+                polling_res = self._web_request("post", f"{PORTAL_URL}/portal/api/v2/oauth2/extension/code-grant/side-channel/next-action-polling", headers=headers, json={"waitUntil": "PT5S"})
+                poll_data = polling_res.json()
+                
+                if poll_data["header"]["resultCode"] != "S0000":
+                    raise OpPayPayLoginError(poll_data)
+
+                if poll_data.get("payload", {}).get("continue", False):
+                    print(f"⏳ 承認待機中... ({poll_attempt + 1}/{max_polling_attempts}) [SMSのURLを開いてください]")
+                    time.sleep(5)
+                    continue
+                
+                redirect_uri = poll_data.get("payload", {}).get("redirect_uri")
+                auth_code = poll_data.get("payload", {}).get("code")
+                
+                if redirect_uri and "paypay://oauth2/callback?code=" in redirect_uri:
+                    code = redirect_uri.split("code=")[1].split("&")[0]
+                    self._finish_token_exchange(code)
+                    print("\n✅ SMSのURLによる承認が検知されました。ログインが完了しました！")
+                    self._login_headers = {}
+                    return
+                elif auth_code:
+                    self._finish_token_exchange(auth_code)
+                    print("\n✅ SMSのURLによる承認が検知されました。ログインが完了しました！")
+                    self._login_headers = {}
+                    return
+                else:
+                    log.warning(f"Polling returned continue=false but no code/redirect_uri: {poll_data}")
+                    print(f"⏳ サーバー応答待ち... ({poll_attempt + 1}/{max_polling_attempts})")
+                    time.sleep(5)
+                    
+            raise OpPayPayLoginError("OTL承認のタイムアウト。SMSのURLを開いて承認操作を行ってください。")
         
         if self.registered_device:
             try:
@@ -377,45 +412,9 @@ class PayPayCore:
         if not self._login_headers:
             raise OpPayPayLoginError("ログインフローが開始されていません。先に login_start を実行してください。")
 
-        if "https://" in code_or_url or re.fullmatch(r"[A-Z]{2}-\d{4}", code_or_url.strip().upper()):
-            if "https://" in code_or_url:
-                if "id=" in code_or_url:
-                    otl_code = code_or_url.split("id=")[-1].split("&")[0].strip()
-                else:
-                    raise OpPayPayLoginError("無効なURLです。")
-            else:
-                otl_code = code_or_url.strip().upper()
-
-            log.info(f"OTL検証コードを送信中: {otl_code}")
-            headers = self._login_headers.copy()
-            headers["Referer"] = f"{PORTAL_URL}/portal/oauth2/l?id={otl_code}&client_id=pay2-mobile-app-client"
-
-            verify_res = self._web_request("post", f"{PORTAL_URL}/portal/api/v2/oauth2/extension/sign-in/2fa/otl/verify", headers=headers, json={"code": otl_code})
-            verify_json = verify_res.json()
-            
-            if verify_json["header"]["resultCode"] != "S0000":
-                raise OpPayPayLoginError(verify_json)
-
-            payload = {"params": {"extension_id": "user-main-2fa-v1", "data": {"type": "COMPLETE_OTL", "payload": None}}}
-            update_res = self._web_request("post", f"{PORTAL_URL}/portal/api/v2/oauth2/extension/code-grant/update", headers=headers, json=payload)
-            get_uri = update_res.json()
-            
-            if get_uri["header"]["resultCode"] != "S0000":
-                raise OpPayPayLoginError(get_uri)
-
-            redirect_uri = get_uri["payload"].get("redirect_uri")
-            if not redirect_uri:
-                raise OpPayPayLoginError("redirect_uriが見つかりませんでした")
-
-            auth_code = parse_qs(urlparse(redirect_uri).query).get("code", [None])[0]
-            self._finish_token_exchange(auth_code)
-            self._login_headers = {}
-            log.info("✅ OTL承認によるログインが完了しました！")
-            return
-
         otp_digits = re.sub(r'\D', '', code_or_url)
         if len(otp_digits) != 4:
-            raise OpPayPayLoginError(f"OTPコードは4桁の数字、またはOTLコード(OR-2742形式)を入力してください（入力: {code_or_url}）")
+            raise OpPayPayLoginError(f"OTPコードは4桁の数字を入力してください（入力: {code_or_url}）")
 
         headers = self._login_headers.copy()
         headers["Referer"] = f"{PORTAL_URL}/portal/oauth2/otp?flow=SIGNIN&otpPrefix={self._otp_prefix}&usernameType=MOBILE&client_id=pay2-mobile-app-client"
@@ -498,7 +497,7 @@ class PayPayCore:
             headers=headers, 
             data=refresh_data, 
             params={"payPayLang": "ja"},
-            timeout=60 # の REFRESH_TOKEN_TIMEOUT = 60000 に準拠
+            timeout=60
         )
         
         if get_token.get("header", {}).get("resultCode") != "S0000":
