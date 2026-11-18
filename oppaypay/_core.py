@@ -294,7 +294,12 @@ class PayPayCore:
         headers.update({
             "Client-OS-Type": "IOS", "Client-OS-Version": "26.6", "Client-Version": VERSION, "Content-Type": "application/json", "Origin": PORTAL_URL,
         })
-        payload = {"username": self.phone, "password": self.password, "signInAttemptCount": 1}
+        payload = {
+            "username": self.phone, 
+            "password": self.password, 
+            "signInAttemptCount": 1,
+            "add_otp_prefix": True  
+        }
         signin_res = self._web_request("post", f"{PORTAL_URL}/portal/api/v2/oauth2/sign-in/password", headers=headers, json=payload)
         signin = signin_res.json()
         if signin["header"]["resultCode"] != "S0000":
