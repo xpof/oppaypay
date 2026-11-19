@@ -156,7 +156,6 @@ class PayPayCore:
         time.sleep(delay)
 
     def _api_request(self, method: str, url: str, max_retries: int = 3, **kwargs) -> dict:
-
         last_exception = None
 
         for attempt in range(max_retries):
@@ -289,6 +288,26 @@ class PayPayCore:
 
         log.info(f"🌐 Web版ログインフロー開始: {self.phone}")
 
+
+        sign_in_url = f"{WEB_PORTAL_URL}/app/account/sign-in"
+        sign_in_headers = {
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+            "Accept-Language": "ja,en-US;q=0.9,en;q=0.8",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "sec-ch-ua": '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+            "sec-ch-ua-mobile": "?0",
+            "sec-ch-ua-platform": '"Windows"',
+            "Upgrade-Insecure-Requests": "1",
+        }
+
+        log.info("📄 サインインページにアクセス中...")
+        try:
+            sign_in_response = self.session.get(sign_in_url, headers=sign_in_headers)
+            if sign_in_response.status_code != 200:
+                log.warning(f"サインインページの取得に失敗しました (Status: {sign_in_response.status_code})")
+        except Exception as e:
+            log.warning(f"サインインページアクセス時にエラー: {e}")
+            
         web_headers = {
             "Accept": "application/json, text/plain, */*",
             "Accept-Language": "ja,en-US;q=0.9,en;q=0.8",
@@ -314,6 +333,13 @@ class PayPayCore:
 
         try:
             response = self._web_request("POST", url, headers=web_headers, json=payload)
+            
+            
+            if response.status_code != 200:
+                log.error(f"トークンリクエスト失敗: Status {response.status_code}")
+                log.error(f"レスポンス内容: {response.text[:200]}")
+                raise OpPayPayLoginError(f"サーバーエラー: {response.status_code}")
+
             data = response.json()
 
             if "otp_prefix" in data.get("payload", {}):
@@ -330,11 +356,14 @@ class PayPayCore:
 
             raise OpPayPayLoginError(f"予期しないレスポンス: {data}")
 
+        except json.JSONDecodeError:
+            log.error("❌ レスポンスがJSON形式ではありません。WAFにブロックされた可能性があります。")
+            log.error(f"レスポンス内容: {response.text[:200]}")
+            raise OpPayPayLoginError("WAFブロックまたはセッションエラー")
         except Exception as e:
             raise OpPayPayLoginError(f"ログイン開始失敗: {e}")
 
     def login_confirm(self, otp_code: str):
-        """SMS OTPコードを入力して認証を完了し、トークンを取得します"""
         if not self._otp_prefix:
             raise OpPayPayLoginError("login_start() を先に実行してください")
 
