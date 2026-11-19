@@ -156,6 +156,7 @@ class PayPayCore:
         time.sleep(delay)
 
     def _api_request(self, method: str, url: str, max_retries: int = 3, **kwargs) -> dict:
+
         last_exception = None
 
         for attempt in range(max_retries):
@@ -288,7 +289,6 @@ class PayPayCore:
 
         log.info(f"🌐 Web版ログインフロー開始: {self.phone}")
 
-        # Web版ログイン用の一時的なヘッダー
         web_headers = {
             "Accept": "application/json, text/plain, */*",
             "Accept-Language": "ja,en-US;q=0.9,en;q=0.8",
@@ -316,7 +316,6 @@ class PayPayCore:
             response = self._web_request("POST", url, headers=web_headers, json=payload)
             data = response.json()
 
-            # OTPが要求された場合
             if "otp_prefix" in data.get("payload", {}):
                 self._otp_prefix = data["payload"]["otp_prefix"]
                 log.info(f"📱 SMS OTPが要求されました。Prefix: {self._otp_prefix}")
@@ -324,7 +323,6 @@ class PayPayCore:
                 self._login_headers = web_headers
                 return
 
-            # トークンが直接返ってきた場合（2FA不要なアカウントの場合）
             if "access_token" in data:
                 self._set_tokens(data)
                 log.info("✅ ログイン成功 (2FA不要)")
@@ -340,7 +338,6 @@ class PayPayCore:
         if not self._otp_prefix:
             raise OpPayPayLoginError("login_start() を先に実行してください")
 
-        # コードから数字のみ抽出
         otp_digits = re.sub(r"\D", "", otp_code)
         if len(otp_digits) != 4:
             raise OpPayPayLoginError("OTPコードは4桁の数字を入力してください")
@@ -382,16 +379,13 @@ class PayPayCore:
             raise OpPayPayLoginError(f"OTP認証失敗: {e}")
 
     def _set_tokens(self, data: dict):
-        """トークンを設定し、ヘッダーをモバイル用に完全に切り替える"""
         self.access_token = data.get("access_token")
         self.refresh_token = data.get("refresh_token")
 
         if self.access_token:
-            # モバイル用ヘッダーに Authorization を追加
             self._mobile_headers["Authorization"] = f"Bearer {self.access_token}"
             self._mobile_headers["Content-Type"] = "application/json"
 
-            # セッションのヘッダーをモバイル用に完全に上書き
             self.session.headers.clear()
             self.session.headers.update(self._mobile_headers)
 
@@ -732,7 +726,7 @@ class PayPayCore:
             raise OpPayPayLoginError("まずはログインしてください")
         return self._api_request(
             "get",
-            f"{BASE_URL}/bff/v1/getPaymentHistory",
+            f"{BASE_URL}/bff/v4/getPaymentHistory",
             params={"payPayLang": "ja", "limit": str(limit), "offset": str(offset)},
         )
 
