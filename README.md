@@ -1,5 +1,5 @@
-<img width="1677" height="767" alt="スクリーンショット 2026-10-29 165934" src="https://github.com/user-attachments/assets/5a046a20-a012-4bd5-bc17-6725f13626d2" />
-
+## [+] api docs -> https://github.com/xpof/oppaypay/blob/main/docs/ApiDocs.md
+---
 # oppaypay v.0.4.3
 
 ---
